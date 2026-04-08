@@ -1,0 +1,54 @@
+전체 흐름
+cryptosniper/
+├── main.py                  ← 진입점, 스케줄러
+├── config.py                ← 설정값 모음
+├── data/
+│   ├── data_fetcher.py
+│   ├── coin_scanner.py
+│   └── orderbook.py
+├── indicators/
+│   ├── trend_indicators.py
+│   ├── momentum_indicators.py
+│   └── volume_indicators.py
+├── strategy/
+│   ├── signal_engine.py
+│   └── signal_scorer.py
+├── risk/
+│   ├── risk_manager.py
+│   ├── circuit_breaker.py
+│   └── leverage_manager.py
+├── execution/
+│   └── order_executor.py
+└── utils/
+    ├── db_logger.py
+    └── telegram_notifier.py
+
+
+CoinScanner.scan()
+│
+├─ _load_markets()          # 마켓 목록 1회 캐시
+├─ _fetch_tickers()         # 전체 24H 티커 조회
+├─ _filter_by_volume()      # 거래대금 $50M 이상만 통과
+│
+└─ 각 심볼 루프
+    └─ _analyze_symbol()
+        ├─ fetch_ohlcv()    # 1H 캔들 100개 수신
+        ├─ ATR 계산         # 변동성 체크
+        ├─ ADX 계산         # 추세 강도 체크
+        ├─ Volume MA 계산   # 거래량 급증 체크
+        └─ _calculate_score() → 0~10점 반환
+
+DataFetcher.start()
+│
+├─ _load_initial_data()          # REST로 과거 캔들 200개 로드
+│   └─ _fetch_and_store()        # 심볼×타임프레임 조합마다 실행
+│
+└─ _run_ws_loop()  ← 백그라운드 스레드
+    └─ _connect_ws()
+        └─ WebSocketApp.run_forever()
+            │
+            └─ _on_message()     # 메시지 수신마다 호출
+                ├─ 캔들 파싱
+                ├─ _update_store()   # DataFrame 실시간 업데이트
+                └─ is_closed=True 시 → on_closed_candle(콜백) 호출
+
