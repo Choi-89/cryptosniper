@@ -1,1 +1,4 @@
 /.env
+__init__.py
+cryptosniper.db
+__pycache__

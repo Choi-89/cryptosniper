@@ -36,7 +36,7 @@ logger = logging.getLogger("data_fetcher")
 
 # ── 상수 ───────────────────────────────────────────────────────────────────────
 WS_BASE_URL       = "wss://fstream.binance.com/stream?streams="  # Futures 복합 스트림
-REST_OHLCV_LIMIT  = 200        # 초기 REST 로드 캔들 수
+REST_OHLCV_LIMIT  = 300        # 초기 REST 로드 캔들 수
 RECONNECT_DELAY   = 5          # 재연결 초기 대기 시간 (초)
 RECONNECT_MAX     = 60         # 재연결 최대 대기 시간 (초)
 PING_INTERVAL     = 20         # WebSocket ping 간격 (초)
@@ -283,6 +283,9 @@ class DataFetcher:
         try:
             msg  = json.loads(raw)
             data = msg.get("data", {})
+
+            # ← 임시 추가
+            logger.debug(f"WS 메시지 수신: stream={msg.get('stream', '')}  e={data.get('e', '')}")
 
             if data.get("e") != "kline":
                 return

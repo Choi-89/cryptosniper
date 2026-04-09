@@ -1,18 +1,24 @@
 """
 coin_scanner.py
 ---------------
-매 5분마다 Binance Futures 전체 종목을 스캔하여
-진입 후보 코인 리스트를 반환하는 모듈.
+Binance Futures 전체 종목을 스캔하여 진입 후보 코인 리스트를 반환하는 모듈.
+
+동작 방식:
+  1. 자정마다 1회: 거래대금 상위 WATCHLIST_SIZE(30)개 고정 관심 심볼 선정
+     → REST API 대량 호출은 이 시점에만 발생
+  2. 이후 scan() 호출 시: 고정 심볼 30개만 OHLCV 조회 → 지표 계산 → 후보 반환
+     → REST 호출 30회로 고정, 429 오류 대폭 감소
 
 필터 조건:
   1. 24H 거래대금 > MIN_QUOTE_VOLUME (기본 $50M)
   2. ATR(14) / 현재가 > MIN_ATR_RATIO (기본 1.5%)
-  3. 현재 거래량 > 20일 평균 거래량 × VOLUME_SURGE_RATIO (기본 2.0)
+  3. 현재 거래량 > 20일 평균 거래량 × VOLUME_SURGE_RATIO (기본 1.2)
   4. ADX(14) > MIN_ADX (기본 25) — 추세 존재 확인
 """
 
 import time
 import logging
+from datetime import date
 from typing import Optional
 
 import ccxt
@@ -20,7 +26,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
-# ── 로거 설정 ──────────────────────────────────────────────────────────────────
+# ── 로거 ───────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -28,18 +34,20 @@ logging.basicConfig(
 logger = logging.getLogger("coin_scanner")
 
 
-# ── 상수 (config.py 완성 전 임시 기본값) ──────────────────────────────────────
-MIN_QUOTE_VOLUME   = 50_000_000   # 24H 거래대금 최소값 (USDT)
-MIN_ATR_RATIO      = 0.015        # ATR / 현재가 최소 비율
-VOLUME_SURGE_RATIO = 2.0          # 현재 거래량 / 20일 평균 배수
+# ── 상수 ───────────────────────────────────────────────────────────────────────
+MIN_QUOTE_VOLUME   = 100_000_000  # 24H 거래대금 최소값 (USDT) — $1억
+MIN_ATR_RATIO      = 0.015        # ATR / 현재가 최소 비율 (1.5%)
+VOLUME_SURGE_RATIO = 1.2          # 현재 거래량 / 20일 평균 배수 (완화)
 MIN_ADX            = 25           # ADX 최소값
-ATR_PERIOD         = 14           # ATR 계산 기간
-ADX_PERIOD         = 14           # ADX 계산 기간
-VOLUME_MA_PERIOD   = 20           # 거래량 이동평균 기간
-OHLCV_LIMIT        = 100          # 지표 계산용 캔들 수 (최소 50 이상 권장)
-TIMEFRAME          = "1h"         # 스캔 기준 타임프레임
-MAX_CANDIDATES     = 10           # 최종 반환 후보 최대 개수
-REQUEST_DELAY      = 0.15         # API 호출 간 딜레이 (초) — 레이트 리밋 방지
+ATR_PERIOD         = 14
+ADX_PERIOD         = 14
+VOLUME_MA_PERIOD   = 20
+OHLCV_LIMIT        = 50           # 지표 계산용 캔들 수
+TIMEFRAME          = "1h"
+MAX_CANDIDATES     = 10           # scan() 최종 반환 후보 수
+REQUEST_DELAY      = 0.5          # API 호출 간 딜레이 (초)
+
+WATCHLIST_SIZE     = 30           # 고정 관심 심볼 수 (자정마다 갱신)
 
 
 class CoinScanner:
@@ -49,8 +57,12 @@ class CoinScanner:
 
     사용 예시:
         scanner = CoinScanner(api_key="...", api_secret="...")
+
+        # 자정마다 1회 호출 — 관심 심볼 30개 선정 (REST 대량 호출)
+        scanner.refresh_watchlist()
+
+        # 5분마다 호출 — 관심 심볼 30개만 분석 (REST 30회)
         candidates = scanner.scan()
-        # [{'symbol': 'BTC/USDT:USDT', 'score': 8.5, 'adx': 32.1, ...}, ...]
     """
 
     def __init__(
@@ -59,13 +71,6 @@ class CoinScanner:
         api_secret: str = "",
         testnet: bool = False,
     ):
-        """
-        Parameters
-        ----------
-        api_key    : Binance API 키
-        api_secret : Binance API 시크릿
-        testnet    : True 이면 테스트넷 사용
-        """
         self.exchange = ccxt.binanceusdm(
             {
                 "apiKey": api_key,
@@ -77,60 +82,115 @@ class CoinScanner:
         if testnet:
             self.exchange.set_sandbox_mode(True)
 
-        # 마켓 정보 캐시 (최초 1회 로드)
         self._markets: dict = {}
+
+        # 고정 관심 심볼 리스트 (자정마다 갱신)
+        self._watchlist: list[str] = []
+        self._watchlist_date: Optional[date] = None   # 마지막 갱신 날짜
 
     # ── 퍼블릭 메서드 ──────────────────────────────────────────────────────────
 
-    def scan(self) -> list[dict]:
+    def refresh_watchlist(self) -> list[str]:
         """
-        전체 종목 스캔 실행.
+        거래대금 상위 WATCHLIST_SIZE 개 심볼을 선정해 고정 관심 리스트 갱신.
+
+        자정마다 1회 호출 (main.py 스케줄러 등록).
+        REST API 대량 호출이 발생하는 유일한 지점.
 
         Returns
         -------
-        list[dict]
-            score 기준 내림차순 정렬된 후보 코인 딕셔너리 목록.
-            각 딕셔너리 키: symbol, score, adx, atr_ratio, volume_ratio,
-                           current_price, quote_volume_24h
+        list[str] : 갱신된 관심 심볼 목록
         """
-        logger.info("=== 코인 스캔 시작 ===")
+        logger.info("=== 관심 심볼 갱신 시작 ===")
 
-        # 1. 마켓 정보 로드 (캐시 없을 때만)
         if not self._markets:
             self._load_markets()
 
-        # 2. 24H 티커 전체 로드 → 거래대금 1차 필터
+        # 티커 1회 조회 → 거래대금 정렬 → 상위 WATCHLIST_SIZE 개 선정
         tickers = self._fetch_tickers()
-        filtered_symbols = self._filter_by_volume(tickers)
-        logger.info(f"거래대금 필터 통과: {len(filtered_symbols)}개")
+        volume_ranked = self._rank_by_volume(tickers)
+        self._watchlist      = volume_ranked[:WATCHLIST_SIZE]
+        self._watchlist_date = date.today()
 
-        # 3. 각 종목 OHLCV → 지표 계산 → 조건 체크
-        candidates = []
-        for symbol in filtered_symbols:
+        logger.info(
+            f"=== 관심 심볼 갱신 완료: {len(self._watchlist)}개 ===  "
+            f"({self._watchlist_date})"
+        )
+        for i, sym in enumerate(self._watchlist, 1):
+            logger.info(f"  {i:>2}. {sym}")
+
+        return self._watchlist
+
+    def scan(self) -> list[dict]:
+        """
+        고정 관심 심볼(30개)만 분석하여 진입 후보 반환.
+
+        watchlist 가 비어 있으면 자동으로 refresh_watchlist() 먼저 실행.
+        REST API 호출 = 최대 WATCHLIST_SIZE(30)회로 고정.
+
+        Returns
+        -------
+        list[dict] : score 기준 내림차순 정렬된 후보 목록
+        """
+        # 관심 심볼이 없으면 먼저 갱신
+        if not self._watchlist:
+            logger.info("관심 심볼 없음 — refresh_watchlist() 자동 실행")
+            self.refresh_watchlist()
+
+        logger.info(
+            f"=== 코인 스캔 시작 "
+            f"(관심 심볼 {len(self._watchlist)}개 대상) ==="
+        )
+
+        candidates    = []
+        consecutive_429 = 0
+
+        for symbol in self._watchlist:
             try:
                 result = self._analyze_symbol(symbol)
                 if result:
                     candidates.append(result)
+                consecutive_429 = 0
                 time.sleep(REQUEST_DELAY)
+
             except ccxt.NetworkError as e:
-                logger.warning(f"[{symbol}] 네트워크 오류: {e}")
+                if "429" in str(e):
+                    consecutive_429 += 1
+                    wait = min(5 * consecutive_429, 60)
+                    logger.warning(
+                        f"[{symbol}] 429 감지 — {wait}초 대기 "
+                        f"(연속 {consecutive_429}회)"
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.warning(f"[{symbol}] 네트워크 오류: {e}")
+
             except ccxt.ExchangeError as e:
                 logger.warning(f"[{symbol}] 거래소 오류: {e}")
+
             except Exception as e:
                 logger.error(f"[{symbol}] 예외 발생: {e}", exc_info=True)
 
-        # 4. 점수 기준 정렬 후 상위 N개 반환
+        # score 기준 정렬 → 상위 MAX_CANDIDATES 개 반환
         candidates.sort(key=lambda x: x["score"], reverse=True)
         top = candidates[:MAX_CANDIDATES]
 
         logger.info(f"=== 스캔 완료: 최종 후보 {len(top)}개 ===")
         for c in top:
             logger.info(
-                f"  {c['symbol']:15s} | score={c['score']:.1f} | "
+                f"  {c['symbol']:20s} | score={c['score']:.1f} | "
                 f"ADX={c['adx']:.1f} | ATR%={c['atr_ratio']*100:.2f}% | "
                 f"VolRatio={c['volume_ratio']:.1f}x"
             )
         return top
+
+    def get_watchlist(self) -> list[str]:
+        """현재 관심 심볼 목록 반환."""
+        return list(self._watchlist)
+
+    def get_watchlist_date(self) -> Optional[date]:
+        """마지막 관심 심볼 갱신 날짜 반환."""
+        return self._watchlist_date
 
     # ── 내부 메서드 ────────────────────────────────────────────────────────────
 
@@ -146,33 +206,40 @@ class CoinScanner:
         tickers = self.exchange.fetch_tickers()
         return tickers
 
-    def _filter_by_volume(self, tickers: dict) -> list[str]:
+    def _rank_by_volume(self, tickers: dict) -> list[str]:
         """
-        24H 거래대금 기준 1차 필터링.
+        USDT 무기한 선물 심볼을 24H 거래대금 기준 내림차순 정렬 후 반환.
+        refresh_watchlist() 에서 상위 WATCHLIST_SIZE 개 선정에 사용.
 
         Parameters
         ----------
-        tickers : ccxt fetch_tickers() 반환값
+        tickers : _fetch_tickers() 반환값
 
         Returns
         -------
-        list[str] : 조건 통과한 심볼 목록
+        list[str] : 거래대금 내림차순 정렬된 심볼 목록
         """
-        passed = []
+        scored = []
         for symbol, ticker in tickers.items():
-            # USDT 무기한 선물만 대상
             if not symbol.endswith("/USDT:USDT"):
                 continue
-            # 스테이블코인 페어 제외
             base = symbol.split("/")[0]
             if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
                 continue
+            market = self._markets.get(symbol, {})
+            if not market.get("active", True):
+                continue
+            quote_vol = float(ticker.get("quoteVolume") or 0)
+            if quote_vol < MIN_QUOTE_VOLUME:
+                continue
+            scored.append((symbol, quote_vol))
 
-            quote_vol = ticker.get("quoteVolume") or 0
-            if quote_vol >= MIN_QUOTE_VOLUME:
-                passed.append(symbol)
-
-        return passed
+        scored.sort(key=lambda x: x[1], reverse=True)
+        logger.info(
+            f"거래대금 필터 통과: {len(scored)}개 "
+            f"(상위 {WATCHLIST_SIZE}개 선정)"
+        )
+        return [s[0] for s in scored]
 
     def _analyze_symbol(self, symbol: str) -> Optional[dict]:
         """

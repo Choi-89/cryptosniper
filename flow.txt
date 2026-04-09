@@ -23,32 +23,346 @@ cryptosniper/
     ├── db_logger.py
     └── telegram_notifier.py
 
+data
+coin_scanner
+    CoinScanner.scan()
+    │
+    ├─ _load_markets()          # 마켓 목록 1회 캐시
+    ├─ _fetch_tickers()         # 전체 24H 티커 조회
+    ├─ _filter_by_volume()      # 거래대금 $50M 이상만 통과
+    │
+    └─ 각 심볼 루프
+        └─ _analyze_symbol()
+            ├─ fetch_ohlcv()    # 1H 캔들 100개 수신
+            ├─ ATR 계산         # 변동성 체크
+            ├─ ADX 계산         # 추세 강도 체크
+            ├─ Volume MA 계산   # 거래량 급증 체크
+            └─ _calculate_score() → 0~10점 반환
 
-CoinScanner.scan()
-│
-├─ _load_markets()          # 마켓 목록 1회 캐시
-├─ _fetch_tickers()         # 전체 24H 티커 조회
-├─ _filter_by_volume()      # 거래대금 $50M 이상만 통과
-│
-└─ 각 심볼 루프
-    └─ _analyze_symbol()
-        ├─ fetch_ohlcv()    # 1H 캔들 100개 수신
-        ├─ ATR 계산         # 변동성 체크
-        ├─ ADX 계산         # 추세 강도 체크
-        ├─ Volume MA 계산   # 거래량 급증 체크
-        └─ _calculate_score() → 0~10점 반환
+data_fetcher
+    DataFetcher.start()
+    │
+    ├─ _load_initial_data()          # REST로 과거 캔들 200개 로드
+    │   └─ _fetch_and_store()        # 심볼×타임프레임 조합마다 실행
+    │
+    └─ _run_ws_loop()  ← 백그라운드 스레드
+        └─ _connect_ws()
+            └─ WebSocketApp.run_forever()
+                │
+                └─ _on_message()     # 메시지 수신마다 호출
+                    ├─ 캔들 파싱
+                    ├─ _update_store()   # DataFrame 실시간 업데이트
+                    └─ is_closed=True 시 → on_closed_candle(콜백) 호출
 
-DataFetcher.start()
-│
-├─ _load_initial_data()          # REST로 과거 캔들 200개 로드
-│   └─ _fetch_and_store()        # 심볼×타임프레임 조합마다 실행
-│
-└─ _run_ws_loop()  ← 백그라운드 스레드
-    └─ _connect_ws()
-        └─ WebSocketApp.run_forever()
+orderbook
+    OrderBookManager.start()
+    │
+    └─ _run_ws_loop()  ← 백그라운드 스레드
+        └─ _connect_ws()
+            └─ WebSocketApp.run_forever()
+                └─ _on_message()
+                    ├─ 메시지 파싱 (bids / asks)
+                    └─ _LocalOrderBook.update()   ← 호가창 교체
+
+
+    get_snapshot(symbol, target_qty)
+    ├─ _LocalOrderBook.get_sorted()      # 정렬된 호가 리스트 추출
+    ├─ spread / spread_pct 계산
+    ├─ bid_wall / ask_wall 계산
+    ├─ OBI 계산
+    ├─ _estimate_slippage()              # 체결 시뮬레이션
+    └─ OrderBookSnapshot 반환
+
+
+    is_safe_to_enter(symbol, direction, target_qty)
+    ├─ get_snapshot() 호출
+    ├─ 스프레드 체크
+    ├─ 슬리피지 체크
+    └─ OBI 방향 역행 체크 → (bool, reason) 반환
+
+indicators
+trend_indicators
+    calculate(df)
+    │
+    ├─ _calc_ema()          EMA 20 / 50 / 200
+    ├─ _calc_adx()          ADX + +DI / -DI
+    ├─ _calc_bb()           볼린저밴드 상·중·하단, %B
+    ├─ _calc_atr()          ATR, ATR/현재가 비율
+    └─ _derive_signals()    파생 판단값 전부 계산
+        │
+        ├─ ema_aligned_up / dn   EMA 정·역배열
+        ├─ trend_direction       UP / DOWN / SIDEWAYS
+        ├─ trend_strength        STRONG / MODERATE / WEAK
+        ├─ near_bb_upper / lower 밴드 경계 근접 여부
+        └─ golden_cross / dead_cross  직전 캔들과 비교
+
+momentum_indicators
+    calculate(df)
+    │
+    ├─ _calc_macd()        MACD 라인 / 시그널 / 히스토그램 (현재 + 직전)
+    ├─ _calc_rsi()         RSI 값 (현재 + 직전)
+    ├─ _calc_stoch_rsi()   %K / %D 값 (현재 + 직전)
+    └─ _derive_signals()   파생 판단값 전부 계산
+        │
+        ├─ macd_bull_cross / bear_cross   히스토그램 부호 전환 감지
+        ├─ macd_hist_growing              모멘텀 강화 여부
+        ├─ rsi_in_bull_zone / bear_zone   진입 허용 구간 체크
+        └─ stoch_bull_cross / bear_cross  K선이 D선 교차 감지
+
+volume_indicators
+    calculate(df)
+    │
+    ├─ _calc_volume_ma()    거래량 MA, 현재/직전 배수
+    ├─ _calc_obv()          OBV + OBV MA
+    ├─ _calc_cvd()          캔들 기반 CVD 근사치 + CVD MA
+    └─ _derive_signals()    파생 판단값 전부 계산
+        │
+        ├─ volume_surge / strong_surge     급등 감지
+        ├─ bull_volume / bear_volume       방향 확인 양봉/음봉 + 급등
+        ├─ obv_new_high / new_low          OBV 극단값 감지
+        ├─ cvd_positive / rising           매수압력 방향
+        └─ divergence_bull / bear          다이버전스 감지
+
+strategy
+signal_engine
+    check(symbol, df_1h, df_15m)
+    │
+    ├─ Step 1. 지표 계산
+    │   ├─ ti.calculate(df_1h)   → TrendResult
+    │   ├─ mi.calculate(df_15m)  → MomentumResult
+    │   └─ vi.calculate(df_15m)  → VolumeResult
+    │
+    ├─ Step 2. 방향 판단 (AND 필터)
+    │   ├─ _check_long()   → (True/False, 거절사유)
+    │   └─ _check_short()  → (True/False, 거절사유)
+    │        둘 다 False → 즉시 HOLD 반환
+    │
+    ├─ Step 3. 보조 점수 계산 (OR 가산)
+    │   ├─ _score_long()   → (score, {조건명: 점수})
+    │   └─ _score_short()  → (score, {조건명: 점수})
+    │
+    ├─ Step 4. 최소 점수 필터 (score < 5 → HOLD)
+    │
+    └─ Step 5. 신호 확정 → SignalResult 반환
+
+signal_scorer
+    evaluate(SignalResult)
+    │
+    ├─ [Step 0] BTC 시장 필터  (signal_engine._check_btc_market)
+    │           알트코인에만 적용, BTC 자신은 스킵
+    │   ├─ BTC ATR > 3%              → HOLD  (급변동 구간)
+    │   └─ BTC EMA20<EMA50 + -DI우세 + ADX>=30 → HOLD  (하락 추세 강화)
+    │
+    ├─ base_score      signal_engine 보조 조건 점수 (0~22)
+    │
+    ├─ _calc_context() 멀티 타임프레임 일치도 보너스 (0~30)
+    │
+    │   ── 1단계: 선행 거래량 / CVD — 에너지 방향 확인 (최대 12점) ──
+    │   ├─ CVD매수 + OBV상승 동시                +5  ← 스마트머니 매집 포착
+    │   ├─ 방향성 양봉/음봉 + 3x급등             +4  ← 패닉 투매 필터 (ATR>4% 제외)
+    │   └─ 다이버전스 + 거래량급등 동시          +3  ← 반전 초기 포착
+    │
+    │   ── 2단계: 모멘텀 조합 — 진입 타이밍 확정 (최대 10점) ──
+    │   ├─ MACD크로스 + StochRSI크로스 동시      +5  ← 두 모멘텀 동시 전환
+    │   ├─ BB Squeeze 탈출 + ATR급증             +3  ← 에너지 응축→폭발 구간
+    │   └─ RSI방향 + MACD 모멘텀 강화 동시       +2  ← 추세 지속 확인
+    │
+    │   ── 3단계: 후행 추세 부스트 — 방향 신뢰도 강화 (최대 8점) ──
+    │   ├─ EMA 완전배열 + 강한추세 동시          +4  ← 타임프레임 동기화
+    │   ├─ ADX >= 50 초강세                      +2
+    │   └─ 골든/데드크로스 + EMA배열 동시        +2
+    │
+    ├─ _calc_penalty() 위험 요소 감점 (-28~0)
+    │   ├─ 역방향 다이버전스                     -6  ← 가장 강한 위험 신호
+    │   ├─ BB 불리한 경계 근접                   -5
+    │   ├─ RSI 극단 구간 진입                    -5
+    │   ├─ OBV 방향 반대                         -4
+    │   ├─ StochRSI 극단 구간                    -4
+    │   ├─ ADX 경계선 불안정 (25~28)             -2  ← -4에서 완화 (이중 처벌 방지)
+    │   ├─ EMA200 역행 진입                      -3
+    │   ├─ 거래량 배수 낮음 (1.0~1.5x)          -3
+    │   └─ BB 과열 돌파 진입                     -2
+    │
+    └─ confidence = (base + context + penalty) / 52 × 100
+         RAW_MAX = base_max(22) + context_max(30) = 52
+
+risk
+risk_manager
+    RiskManager
+    │
+    ├─ calculate_plan_for(symbol, sig, score)
+    │   ├─ _check_entry_conditions()   진입 게이트 체크
+    │   │   ├─ scorer 거절 여부
+    │   │   ├─ 최대 포지션 수 (3개)
+    │   │   ├─ 동일 심볼 중복 진입 차단
+    │   │   └─ 최소 포지션 크기 체크
+    │   └─ _build_plan()               SL / TP / 크기 계산
+    │       └─ _calc_position_size()   핵심 공식 적용
+    │
+    ├─ open_position(plan)             Position 메모리 등록
+    │
+    └─ update_positions(prices)        매 캔들마다 호출
+        └─ _evaluate_position(pos, price)
+            ├─ OPEN      → SL / TP1 / TP2 체크
+            ├─ TP1_HIT   → SL(진입가) / TP2 체크
+            └─ TP2_HIT   → 트레일링 스탑 관리
+
+circuit_breaker
+    record_trade(pnl) 호출
+    │
+    ├─ pnl ≥ 0 → 수익
+    │   └─ consec_losses 리셋
+    │
+    └─ pnl < 0 → 손실
+        ├─ daily_loss += |pnl|
+        ├─ consec_losses += 1
+        └─ _evaluate_halt_conditions()
+            ├─ daily_loss ≥ 자본×3%  → DAILY_HALT  (자정까지)
+            └─ consec_losses ≥ 3     → COOLDOWN    (1시간)
+
+    자정 백그라운드 스레드
+        └─ _do_daily_reset()
+            ├─ 통계 초기화
+            └─ DAILY_HALT 자동 해제
+
+    쿨다운 만료 체크 (check() 호출마다)
+        └─ time.time() ≥ cooldown_until → CLEAR
+
+leverage_manager
+    decide(symbol, score, cb_status)
+    │
+    ├─ Step 1. base_leverage   ← signal_scorer.leverage
+    │
+    ├─ Step 2. _calc_market_mult()   ADX + ATR 보정 (0.5 ~ 1.2)
+    │   ├─ ADX ≥ 40  강한추세     → +0.2
+    │   ├─ ADX < 28  불안정       → -0.2
+    │   ├─ ADX < 25  횡보         → -0.5
+    │   ├─ ATR% > 4% 고변동성     → -0.3
+    │   └─ ATR% < 1.5% 저변동성   → +0.1
+    │
+    ├─ Step 3. _calc_risk_mult()     손실률 + 연속손절 보정 (0.5 ~ 1.0)
+    │   ├─ 일손실 ≥ 2.5%            → ×0.6
+    │   ├─ 일손실 ≥ 1.5%            → ×0.8
+    │   ├─ 연속손절 ≥ 2회           → ×0.7
+    │   └─ 연속손절 ≥ 1회           → ×0.9
+    │
+    ├─ Step 4. adjusted = base × market × risk (소수점 버림)
+    ├─ Step 5. clamp(adjusted, MIN=1, symbol_max)
+    └─ Step 6. _set_exchange_leverage()  거래소 API 호출 (캐시 확인 후)
+
+execution
+order_executor
+    execute_entry(plan)
+    │
+    ├─ 1. 진입 MARKET 주문
+    │      실패 → ExecutionReport(success=False) 즉시 반환
+    │
+    ├─ 2. 실제 체결가로 SL/TP 재계산  _recalc_levels()
+    │
+    ├─ 3. SL STOP_MARKET 주문
+    │      실패 → _emergency_close()  역방향 시장가 긴급 청산
+    │
+    ├─ 4. TP1 TAKE_PROFIT_MARKET (50%)
+    ├─ 5. TP2 TAKE_PROFIT_MARKET (50%)
+    └─ 활성 주문 ID 캐시 저장
+
+    handle_action(action)        ← risk_manager.update_positions() 결과
+    ├─ CLOSE_FULL    → _close_position(ratio=1.0)
+    ├─ CLOSE_PARTIAL → _close_position(ratio=0.5)
+    └─ MOVE_SL       → _move_sl(new_sl)
+        ├─ 기존 SL cancel_order()
+        └─ 새 SL STOP_MARKET 등록
+
+utils
+db_logger
+    trades          개별 트레이드 완전 기록
+    ├─ id, symbol, direction
+    ├─ entry_price, close_price, position_size, leverage
+    ├─ pnl_usdt, fee_usdt, pnl_pct
+    ├─ close_reason (TP1/SL/트레일링)
+    ├─ signal_score, confidence
+    ├─ entry_at, close_at
+    └─ atr, adx, rsi, volume_ratio (진입 당시 지표값)
+
+    signals         신호 발생 기록 (HOLD 포함 — 전략 분석용)
+    └─ symbol, signal, score, confidence, reject_reason, 지표값
+
+    daily_stats     일별 집계 (캐시)
+    errors          주문 오류 기록
+    meta            스키마 버전 등 메타데이터
+
+telegram_notifier
+    TelegramNotifier.start()
+    │
+    ├─ _worker()         ← 백그라운드 전송 스레드
+    │   └─ PriorityQueue에서 꺼내 _send_with_retry()
+    │
+    └─ _heartbeat_loop() ← 1시간마다 생존 신호
+
+    send_entry() / send_close() / send_halt() ...
+    └─ _enqueue()
+        ├─ 중복 차단 체크 (THROTTLE_SEC=30초)
+        └─ PriorityQueue.put((level, seq, msg))
+
+
+config
+    Config
+    ├─ ExchangeConfig     API 키, WebSocket URL, 수수료
+    ├─ ScannerConfig      필터 조건, 스캔 주기, 후보 수
+    ├─ IndicatorConfig    EMA/ADX/BB/ATR/MACD/RSI/StochRSI/거래량 파라미터
+    ├─ StrategyConfig     점수 기준, 신뢰도 기준, 레버리지 테이블
+    ├─ RiskConfig         자본, SL/TP 배수, 포지션 한도, CB 한도
+    ├─ ExecutionConfig    주문 재시도, 주문 타입
+    ├─ NotificationConfig 텔레그램 토큰, 알림 on/off 플래그
+    └─ SystemConfig       DB 경로, 로그 설정, dry_run
+
+main
+    main()
+    │
+    └─ CryptoSniperBot.start()
+        │
+        ├─ notifier.start()              텔레그램 백그라운드 시작
+        ├─ scanner.scan()                초기 후보 코인 스캔
+        ├─ _start_feeds(symbols)         DataFetcher + OrderBook WebSocket 시작
+        ├─ scheduler.start()             APScheduler 등록
+        │
+        └─ 메인 루프 (stop_event 대기)
             │
-            └─ _on_message()     # 메시지 수신마다 호출
-                ├─ 캔들 파싱
-                ├─ _update_store()   # DataFrame 실시간 업데이트
-                └─ is_closed=True 시 → on_closed_candle(콜백) 호출
+            ├─ [매 캔들 닫힘] _on_candle_close()
+            │    └─ _process_signal(symbol)
+            │         ├─ CB 차단 확인
+            │         ├─ 기존 포지션 업데이트
+            │         ├─ signal_engine → signal_scorer
+            │         ├─ leverage_manager 레버리지 확정
+            │         ├─ risk_manager 플랜 계산
+            │         ├─ orderbook 유동성 점검
+            │         └─ order_executor 주문 실행
+            │
+            ├─ [매 5분] _scheduled_scan()   후보 코인 재스캔
+            ├─ [매 1분] _update_all_positions()  포지션 SL/트레일링 체크
+            ├─ [매 5분] _refresh_balance()   잔고 갱신
+            └─ [자정]   _send_daily_report() 일별 성과 리포트
 
+
+
+────────────────────────────────────────────────────────────────
+ 변경 이력
+────────────────────────────────────────────────────────────────
+ signal_scorer
+    [v1 → v2] signal_scorer 재설계
+    - 판단 순서 역전: 추세(후행) → 거래량(선행) → 모멘텀 → 추세(확인)
+    - BB Squeeze 탈출 + ATR 급증 신규 추가 (+3)
+    - 투매 필터: ATR > 4% 시 거래량 급등 보너스 제외
+    - 후행 추세 비중 축소: 13점 → 8점
+    
+    [v2 → v3] BTC 시장 필터 추가
+    - Step 0 신설: BTC 급변동·하락추세 시 알트 진입 HOLD 게이트
+    - 거래량 지속성 보너스 +1 추가 (일시적)
+    
+    [v3 → v4] 중복 필터 제거 및 감점 완화
+    - MACD 모멘텀 약화 (-3) 제거
+        └─ 이유: 필수 조건(MACD hist > 0) + 보너스 미달로 이미 처리됨 → 이중 처벌
+    - 거래량 지속성 보너스 (+1) 제거
+        └─ 이유: CVD+OBV 동시 방향(+5)에 지속성 개념이 이미 포함
+    - ADX 경계선 불안정 -4 → -2 완화
+        └─ 이유: 필수 조건(ADX≥25) 통과 후 추가 -4는 이중 처벌, -2가 적절
