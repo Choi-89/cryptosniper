@@ -159,6 +159,9 @@ def calculate(df: pd.DataFrame) -> Optional[MomentumResult]:
         return None
 
     df = df.copy()
+    if df.index.duplicated().any():
+        logger.warning(f"중복 타임스탬프 감지 — 마지막 값으로 정리 ({df.index.duplicated().sum()}개)")
+        df = df[~df.index.duplicated(keep="last")]
 
     try:
         result = MomentumResult()

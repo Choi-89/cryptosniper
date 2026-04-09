@@ -30,8 +30,22 @@ from typing import Optional
 
 import ccxt
 
-from strategy.signal_scorer import ScoreResult
-from risk.circuit_breaker import CircuitStatus, HaltLevel
+DEMO_TRADING_URLS = {
+    "api": {
+        "fapiPublic":    "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPrivate":   "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPublicV2":  "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPrivateV2": "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPublicV3":  "https://testnet.binancefuture.com/fapi/v3",
+        "fapiPrivateV3": "https://testnet.binancefuture.com/fapi/v3",
+        "public":  "https://testnet.binancefuture.com/fapi/v1",
+        "private": "https://testnet.binancefuture.com/fapi/v1",
+    }
+}
+
+
+from signal_scorer   import ScoreResult
+from circuit_breaker import CircuitStatus, HaltLevel
 
 # ── 로거 ───────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("leverage_manager")
@@ -136,15 +150,21 @@ class LeverageManager:
         api_key:    str = "",
         api_secret: str = "",
         testnet:    bool = False,
+        demo:       bool = False,
     ):
         self.exchange = ccxt.binanceusdm({
-            "apiKey":    api_key,
-            "secret":    api_secret,
-            "options":   {"defaultType": "future"},
+            "apiKey":  api_key,
+            "secret":  api_secret,
+            "options": {
+                "defaultType":     "future",
+                "fetchCurrencies": False,     # Spot SAPI 호출 차단
+                "adjustForTimeDifference": True,
+            },
             "enableRateLimit": True,
+            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
         })
-        if testnet:
-            self.exchange.set_sandbox_mode(True)
+        if demo:
+            self.exchange.urls.update(DEMO_TRADING_URLS)
 
         # {symbol: (leverage, set_at)} — 캐시
         self._cache: dict[str, tuple[int, float]] = {}

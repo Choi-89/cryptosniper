@@ -31,6 +31,20 @@ from typing import Optional, Callable
 
 import ccxt
 
+DEMO_TRADING_URLS = {
+    "api": {
+        "fapiPublic":    "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPrivate":   "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPublicV2":  "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPrivateV2": "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPublicV3":  "https://testnet.binancefuture.com/fapi/v3",
+        "fapiPrivateV3": "https://testnet.binancefuture.com/fapi/v3",
+        "public":  "https://testnet.binancefuture.com/fapi/v1",
+        "private": "https://testnet.binancefuture.com/fapi/v1",
+    }
+}
+
+
 from risk.risk_manager import PositionPlan, RiskManager
 from risk.circuit_breaker import CircuitBreaker
 
@@ -137,6 +151,7 @@ class OrderExecutor:
         on_trade_closed: Optional[Callable[[OrderResult], None]] = None,
         on_order_filled: Optional[Callable[[OrderResult], None]] = None,
         testnet:         bool = False,
+        demo:            bool = False,
     ):
         """
         Parameters
@@ -150,13 +165,19 @@ class OrderExecutor:
         testnet          : True 이면 테스트넷 사용
         """
         self.exchange = ccxt.binanceusdm({
-            "apiKey":         api_key,
-            "secret":         api_secret,
-            "options":        {"defaultType": "future"},
+            "apiKey":  api_key,
+            "secret":  api_secret,
+            "options": {
+                "defaultType":     "future",
+                "fetchCurrencies": False,     # Spot SAPI 호출 차단
+                "adjustForTimeDifference": True,
+            },
             "enableRateLimit": True,
+            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
         })
-        if testnet:
-            self.exchange.set_sandbox_mode(True)
+        if demo:
+            self.exchange.urls.update(DEMO_TRADING_URLS)
+
 
         self._rm   = risk_manager
         self._cb   = circuit_breaker

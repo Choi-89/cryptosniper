@@ -22,6 +22,20 @@ from datetime import date
 from typing import Optional
 
 import ccxt
+
+DEMO_TRADING_URLS = {
+    "api": {
+        "fapiPublic":    "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPrivate":   "https://testnet.binancefuture.com/fapi/v1",
+        "fapiPublicV2":  "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPrivateV2": "https://testnet.binancefuture.com/fapi/v2",
+        "fapiPublicV3":  "https://testnet.binancefuture.com/fapi/v3",
+        "fapiPrivateV3": "https://testnet.binancefuture.com/fapi/v3",
+        "public":  "https://testnet.binancefuture.com/fapi/v1",
+        "private": "https://testnet.binancefuture.com/fapi/v1",
+    }
+}
+
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
@@ -70,17 +84,21 @@ class CoinScanner:
         api_key: str = "",
         api_secret: str = "",
         testnet: bool = False,
+        demo: bool = False,
     ):
-        self.exchange = ccxt.binanceusdm(
-            {
-                "apiKey": api_key,
-                "secret": api_secret,
-                "options": {"defaultType": "future"},
-                "enableRateLimit": True,
-            }
-        )
-        if testnet:
-            self.exchange.set_sandbox_mode(True)
+        self.exchange = ccxt.binanceusdm({
+            "apiKey":  api_key,
+            "secret":  api_secret,
+            "options": {
+                "defaultType":     "future",
+                "fetchCurrencies": False,     # Spot SAPI 호출 차단
+                "adjustForTimeDifference": True,
+            },
+            "enableRateLimit": True,
+            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
+        })
+        if demo:
+            self.exchange.urls.update(DEMO_TRADING_URLS)
 
         self._markets: dict = {}
 

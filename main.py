@@ -112,6 +112,9 @@ class CryptoSniperBot:
     def __init__(self):
         self.cfg = get_config()
         self._running = False
+        # Demo Trading 모드 여부 (.env USE_DEMO=true 시 Demo 엔드포인트 사용)
+        import os
+        self._demo = os.getenv("USE_DEMO", "false").lower() == "true"
         self._stop_event = threading.Event()
 
         # ── 모듈 인스턴스 ────────────────────────────────────────────────────
@@ -144,11 +147,13 @@ class CryptoSniperBot:
             api_key    = self.cfg.exchange.api_key,
             api_secret = self.cfg.exchange.api_secret,
             testnet    = self.cfg.exchange.testnet,
+            demo       = self._demo,
         )
         self.scanner = CoinScanner(
             api_key    = self.cfg.exchange.api_key,
             api_secret = self.cfg.exchange.api_secret,
             testnet    = self.cfg.exchange.testnet,
+            demo       = self._demo,
         )
         self.ob = OrderBookManager(symbols=[])   # 심볼은 스캔 후 설정
 
@@ -159,6 +164,7 @@ class CryptoSniperBot:
             circuit_breaker = self.cb,
             on_trade_closed = self._on_trade_closed,
             testnet         = self.cfg.exchange.testnet,
+            demo            = self._demo,
         )
 
         # DataFetcher 는 스캔 후 심볼 확정 시점에 생성
@@ -183,6 +189,7 @@ class CryptoSniperBot:
         logger.info(f"  CryptoSniper Bot 시작")
         logger.info(f"  자본: {self.cfg.risk.initial_capital:,.2f} USDT")
         logger.info(f"  모드: {'테스트넷' if self.cfg.exchange.testnet else '실거래'}"
+                    f"{'  [DEMO]' if self._demo else ''}"
                     f"{'  [DRY RUN]' if self.cfg.system.dry_run else ''}")
         logger.info("=" * 60)
 
@@ -270,6 +277,7 @@ class CryptoSniperBot:
             api_key          = self.cfg.exchange.api_key,
             api_secret       = self.cfg.exchange.api_secret,
             testnet          = self.cfg.exchange.testnet,
+            demo             = self._demo,
         )
         self.fetcher.start()
 
@@ -446,7 +454,7 @@ class CryptoSniperBot:
         if report.success:
             from dataclasses import replace
 
-            from order_executor import _recalc_levels
+            from execution.order_executor import _recalc_levels
 
             actual_entry = report.entry.avg_price or plan.entry_price
             actual_sl, actual_tp1, actual_tp2 = _recalc_levels(plan, actual_entry)
