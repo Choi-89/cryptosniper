@@ -112,9 +112,6 @@ class CryptoSniperBot:
     def __init__(self):
         self.cfg = get_config()
         self._running = False
-        # Demo Trading 모드 여부 (.env USE_DEMO=true 시 Demo 엔드포인트 사용)
-        import os
-        self._demo = os.getenv("USE_DEMO", "false").lower() == "true"
         self._stop_event = threading.Event()
 
         # ── 모듈 인스턴스 ────────────────────────────────────────────────────
@@ -147,13 +144,11 @@ class CryptoSniperBot:
             api_key    = self.cfg.exchange.api_key,
             api_secret = self.cfg.exchange.api_secret,
             testnet    = self.cfg.exchange.testnet,
-            demo       = self._demo,
         )
         self.scanner = CoinScanner(
             api_key    = self.cfg.exchange.api_key,
             api_secret = self.cfg.exchange.api_secret,
             testnet    = self.cfg.exchange.testnet,
-            demo       = self._demo,
         )
         self.ob = OrderBookManager(symbols=[])   # 심볼은 스캔 후 설정
 
@@ -164,7 +159,6 @@ class CryptoSniperBot:
             circuit_breaker = self.cb,
             on_trade_closed = self._on_trade_closed,
             testnet         = self.cfg.exchange.testnet,
-            demo            = self._demo,
         )
 
         # DataFetcher 는 스캔 후 심볼 확정 시점에 생성
@@ -189,7 +183,6 @@ class CryptoSniperBot:
         logger.info(f"  CryptoSniper Bot 시작")
         logger.info(f"  자본: {self.cfg.risk.initial_capital:,.2f} USDT")
         logger.info(f"  모드: {'테스트넷' if self.cfg.exchange.testnet else '실거래'}"
-                    f"{'  [DEMO]' if self._demo else ''}"
                     f"{'  [DRY RUN]' if self.cfg.system.dry_run else ''}")
         logger.info("=" * 60)
 
@@ -277,7 +270,6 @@ class CryptoSniperBot:
             api_key          = self.cfg.exchange.api_key,
             api_secret       = self.cfg.exchange.api_secret,
             testnet          = self.cfg.exchange.testnet,
-            demo             = self._demo,
         )
         self.fetcher.start()
 
@@ -454,7 +446,7 @@ class CryptoSniperBot:
         if report.success:
             from dataclasses import replace
 
-            from execution.order_executor import _recalc_levels
+            from order_executor import _recalc_levels
 
             actual_entry = report.entry.avg_price or plan.entry_price
             actual_sl, actual_tp1, actual_tp2 = _recalc_levels(plan, actual_entry)
@@ -602,6 +594,15 @@ class CryptoSniperBot:
             name = "일별 리포트",
         )
 
+        # ── 1분마다: 거래량 급증 종목 감지 (RAVE 같은 수직 급등 조기 포착)
+        self.scheduler.add_job(
+            self._detect_volume_surge,
+            trigger = IntervalTrigger(seconds=60),
+            id      = "volume_surge",
+            name    = "거래량 급증 감지",
+            misfire_grace_time = 10,
+        )
+
         # ── 5분마다: 잔고 갱신
         self.scheduler.add_job(
             self._refresh_balance,
@@ -643,6 +644,22 @@ class CryptoSniperBot:
                             "confidence": pos.confidence,
                         },
                     )
+
+    def _detect_volume_surge(self) -> None:
+        """1분마다 전체 티커를 조회해 거래량 급증 종목을 watchlist에 임시 추가."""
+        try:
+            newly = self.scanner.detect_volume_surge()
+            if newly:
+                # 새로 감지된 종목이 있으면 피드 재구독
+                current_symbols = set(self.scanner.get_watchlist())
+                surge_symbols   = set(self.scanner.get_surge_symbols().keys())
+                all_symbols     = list(current_symbols | surge_symbols)
+                self._start_feeds(all_symbols)
+                logger.info(
+                    f"거래량 급증 감지 → 피드 재구독: {newly}"
+                )
+        except Exception as e:
+            logger.error(f"거래량 급증 감지 오류: {e}")
 
     def _refresh_balance(self) -> None:
         """5분마다 USDT 잔고를 거래소에서 조회해 자본 갱신."""

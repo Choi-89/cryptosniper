@@ -44,7 +44,7 @@ DEMO_TRADING_URLS = {
 }
 
 
-from signal_scorer   import ScoreResult
+from strategy.signal_scorer   import ScoreResult
 from circuit_breaker import CircuitStatus, HaltLevel
 
 # ── 로거 ───────────────────────────────────────────────────────────────────────

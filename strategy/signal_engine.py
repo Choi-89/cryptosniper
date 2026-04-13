@@ -37,7 +37,7 @@ logger = logging.getLogger("signal_engine")
 
 
 # ── 파라미터 상수 ──────────────────────────────────────────────────────────────
-MIN_SCORE_TO_ENTER = 5      # 이 점수 이상일 때만 진입 허가 (최대 약 22점)
+MIN_SCORE_TO_ENTER = 3      # [테스트 완화] 3 (원래: 5)
 MAX_SCORE          = 22     # 실제 보조 조건 합산 최대 (추세7 + 모멘텀7 + 거래량8)
 
 
@@ -210,24 +210,28 @@ def _check_long(
         return False, f"EMA20({trend.ema_short:.2f}) ≤ EMA50({trend.ema_mid:.2f})"
 
     # T2. ADX 추세 강도
-    if trend.adx < 25:
-        return False, f"ADX={trend.adx:.1f} < 25 (추세 없음)"
+    # [테스트 완화] 15 (원래: 25)
+    if trend.adx < 15:
+        return False, f"ADX={trend.adx:.1f} < 15 (추세 없음)"
 
     # T3. +DI > -DI
-    if trend.adx_plus_di <= trend.adx_minus_di:
-        return False, f"+DI({trend.adx_plus_di:.1f}) ≤ -DI({trend.adx_minus_di:.1f})"
+    # [테스트 비활성화] 나중에 다시 사용 시 아래 주석 해제
+    # if trend.adx_plus_di <= trend.adx_minus_di:
+    #     return False, f"+DI({trend.adx_plus_di:.1f}) ≤ -DI({trend.adx_minus_di:.1f})"
 
     # M1. MACD 히스토그램 양수
     if momentum.macd_hist <= 0:
         return False, f"MACD hist={momentum.macd_hist:.6f} ≤ 0"
 
     # M2. RSI 범위
-    if not momentum.rsi_in_bull_zone:
+    # [테스트 완화] 30~75 (원래: 40~65)
+    if not (30 <= momentum.rsi <= 75):
         return False, f"RSI={momentum.rsi:.1f} 롱 진입 구간(40~65) 벗어남"
 
     # V1. 거래량 급등
-    if not volume.volume_surge:
-        return False, f"거래량 배수={volume.volume_ratio:.2f}x < 2.0x"
+    # [테스트 완화] 1.0x (원래: 2.0x)
+    if volume.volume_ratio < 1.0:
+        return False, f"거래량 배수={volume.volume_ratio:.2f}x < 1.0x"
 
     return True, ""
 
@@ -259,24 +263,28 @@ def _check_short(
         return False, f"EMA20({trend.ema_short:.2f}) ≥ EMA50({trend.ema_mid:.2f})"
 
     # T2. ADX 추세 강도
-    if trend.adx < 25:
-        return False, f"ADX={trend.adx:.1f} < 25"
+    # [테스트 완화] 15 (원래: 25)
+    if trend.adx < 15:
+        return False, f"ADX={trend.adx:.1f} < 15"
 
     # T3. -DI > +DI
-    if trend.adx_minus_di <= trend.adx_plus_di:
-        return False, f"-DI({trend.adx_minus_di:.1f}) ≤ +DI({trend.adx_plus_di:.1f})"
+    # [테스트 비활성화] 나중에 다시 사용 시 아래 주석 해제
+    # if trend.adx_minus_di <= trend.adx_plus_di:
+    #     return False, f"-DI({trend.adx_minus_di:.1f}) ≤ +DI({trend.adx_plus_di:.1f})"
 
     # M1. MACD 히스토그램 음수
     if momentum.macd_hist >= 0:
         return False, f"MACD hist={momentum.macd_hist:.6f} ≥ 0"
 
     # M2. RSI 범위
-    if not momentum.rsi_in_bear_zone:
+    # [테스트 완화] 25~70 (원래: 35~60)
+    if not (25 <= momentum.rsi <= 70):
         return False, f"RSI={momentum.rsi:.1f} 숏 진입 구간(35~60) 벗어남"
 
     # V1. 거래량 급등
-    if not volume.volume_surge:
-        return False, f"거래량 배수={volume.volume_ratio:.2f}x < 2.0x"
+    # [테스트 완화] 1.0x (원래: 2.0x)
+    if volume.volume_ratio < 1.0:
+        return False, f"거래량 배수={volume.volume_ratio:.2f}x < 1.0x"
 
     return True, ""
 

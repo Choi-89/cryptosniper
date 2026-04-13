@@ -22,6 +22,16 @@ from collections import defaultdict
 from typing import Callable, Optional
 
 import ccxt
+import pandas as pd
+import pandas_ta as ta
+import websocket  # websocket-client 패키지
+
+# ── 로거 ───────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+)
+logger = logging.getLogger("data_fetcher")
 
 DEMO_TRADING_URLS = {
     "api": {
@@ -35,18 +45,6 @@ DEMO_TRADING_URLS = {
         "private": "https://testnet.binancefuture.com/fapi/v1",
     }
 }
-
-import pandas as pd
-import pandas_ta as ta
-import websocket  # websocket-client 패키지
-
-# ── 로거 ───────────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-)
-logger = logging.getLogger("data_fetcher")
-
 
 # ── 상수 ───────────────────────────────────────────────────────────────────────
 WS_BASE_URL       = "wss://fstream.binance.com/stream?streams="  # Futures 복합 스트림
@@ -373,6 +371,7 @@ class DataFetcher:
             if is_closed:
                 # 새 캔들 추가
                 df = pd.concat([df, new_row])
+                df = df[~df.index.duplicated(keep="last")]
                 # 최대 행 수 유지 (메모리 관리)
                 if len(df) > REST_OHLCV_LIMIT:
                     df = df.iloc[-REST_OHLCV_LIMIT:]
@@ -383,6 +382,7 @@ class DataFetcher:
                 else:
                     # 새 타임스탬프면 행 추가
                     df = pd.concat([df, new_row])
+                    df = df[~df.index.duplicated(keep="last")]
 
             self._store[symbol][timeframe] = df
 

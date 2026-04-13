@@ -3,3 +3,4 @@ __init__.py
 cryptosniper.db
 __pycache__
 venv
+cryptosniper.log

@@ -57,7 +57,8 @@ PENALTY_MAX      = 30
 RAW_MAX          = BASE_MAX + CONTEXT_MAX   # 52
 
 # confidence 진입 최소 임계값
-MIN_CONFIDENCE   = 40
+# [테스트 완화] 15 (원래: 40)
+MIN_CONFIDENCE   = 15
 
 # 레버리지 테이블: (confidence 하한, 레버리지)
 LEVERAGE_TABLE = [
