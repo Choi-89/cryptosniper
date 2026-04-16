@@ -184,6 +184,11 @@ class CryptoSniperBot:
         logger.info(f"  자본: {self.cfg.risk.initial_capital:,.2f} USDT")
         logger.info(f"  모드: {'테스트넷' if self.cfg.exchange.testnet else '실거래'}"
                     f"{'  [DRY RUN]' if self.cfg.system.dry_run else ''}")
+        logger.info(f"  ── 실효 전략 파라미터 ──")
+        logger.info(f"  min_score_to_enter : {self.cfg.strategy.min_score_to_enter}")
+        logger.info(f"  min_confidence     : {self.cfg.strategy.min_confidence}")
+        logger.info(f"  risk_per_trade_pct : {self.cfg.risk.risk_per_trade_pct*100:.1f}%")
+        logger.info(f"  max_positions      : {self.cfg.risk.max_positions}")
         logger.info("=" * 60)
 
         self._running = True
@@ -199,14 +204,14 @@ class CryptoSniperBot:
         # 3. 관심 심볼 기반 초기 스캔 (30개 대상)
         logger.info("초기 코인 스캔 시작...")
         candidates = self._run_scan()
+        # 수정안 2: 후보 유무와 관계없이 watchlist 전체를 기본 구독
+        # scanner 후보는 우선순위 참고용이지, 감시 범위를 축소하지 않음
+        watchlist_symbols = self.scanner.get_watchlist() or ["BTC/USDT:USDT", "ETH/USDT:USDT"]
         if not candidates:
             logger.warning("초기 스캔에서 후보 코인 없음 — 관심 심볼 전체로 시작")
-            candidates_symbols = self.scanner.get_watchlist() or ["BTC/USDT:USDT", "ETH/USDT:USDT"]
         else:
-            candidates_symbols = [c["symbol"] for c in candidates]
-
-        # 4. DataFetcher / OrderBookManager 시작
-        self._start_feeds(candidates_symbols)
+            logger.info(f"초기 후보 {len(candidates)}개 — watchlist 전체({len(watchlist_symbols)}개) 구독")
+        self._start_feeds(watchlist_symbols)
 
         # 4. 스케줄러 등록
         self._register_schedules()
@@ -339,6 +344,10 @@ class CryptoSniperBot:
         pos = self.rm.get_position(symbol)
         if pos:
             exchange_size = self.executor.fetch_position_size(symbol)
+            if exchange_size is None:
+                # API 오류 (429 등) — 포지션 없음으로 오판 방지, 이번 사이클 스킵
+                logger.warning(f"[{symbol}] 포지션 조회 API 오류 — 이번 사이클 스킵")
+                return
             if exchange_size <= 0:
                 self.rm.close_position(symbol, reason="거래소 포지션 종료 감지")
                 logger.info(f"[{symbol}] 거래소 포지션 종료 감지 — 로컬 상태 정리")
@@ -594,15 +603,6 @@ class CryptoSniperBot:
             name = "일별 리포트",
         )
 
-        # ── 1분마다: 거래량 급증 종목 감지 (RAVE 같은 수직 급등 조기 포착)
-        self.scheduler.add_job(
-            self._detect_volume_surge,
-            trigger = IntervalTrigger(seconds=60),
-            id      = "volume_surge",
-            name    = "거래량 급증 감지",
-            misfire_grace_time = 10,
-        )
-
         # ── 5분마다: 잔고 갱신
         self.scheduler.add_job(
             self._refresh_balance,
@@ -624,6 +624,10 @@ class CryptoSniperBot:
 
         for pos in positions:
             exchange_size = self.executor.fetch_position_size(pos.symbol)
+            if exchange_size is None:
+                # API 오류 — 포지션 없음으로 오판 방지, 이번 사이클 스킵
+                logger.warning(f"[{pos.symbol}] 포지션 조회 API 오류 — 이번 사이클 스킵")
+                continue
             if exchange_size <= 0:
                 self.rm.close_position(pos.symbol, reason="거래소 포지션 종료 감지")
                 continue
@@ -644,22 +648,6 @@ class CryptoSniperBot:
                             "confidence": pos.confidence,
                         },
                     )
-
-    def _detect_volume_surge(self) -> None:
-        """1분마다 전체 티커를 조회해 거래량 급증 종목을 watchlist에 임시 추가."""
-        try:
-            newly = self.scanner.detect_volume_surge()
-            if newly:
-                # 새로 감지된 종목이 있으면 피드 재구독
-                current_symbols = set(self.scanner.get_watchlist())
-                surge_symbols   = set(self.scanner.get_surge_symbols().keys())
-                all_symbols     = list(current_symbols | surge_symbols)
-                self._start_feeds(all_symbols)
-                logger.info(
-                    f"거래량 급증 감지 → 피드 재구독: {newly}"
-                )
-        except Exception as e:
-            logger.error(f"거래량 급증 감지 오류: {e}")
 
     def _refresh_balance(self) -> None:
         """5분마다 USDT 잔고를 거래소에서 조회해 자본 갱신."""

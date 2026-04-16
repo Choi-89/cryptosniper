@@ -121,8 +121,8 @@ class IndicatorConfig:
     rsi_period:      int   = 14
     rsi_overbought:  float = 70.0
     rsi_oversold:    float = 30.0
-    rsi_bull_min:    float = 40.0   # 롱 진입 허용 RSI 하한
-    rsi_bull_max:    float = 65.0   # 롱 진입 허용 RSI 상한
+    rsi_bull_min:    float = 30.0   # 롱 진입 허용 RSI 하한 테스트 30.0 (원래: 40.0)
+    rsi_bull_max:    float = 75.0   # 롱 진입 허용 RSI 상한 테스트 75.0 (원래: 60.0)
     rsi_bear_min:    float = 35.0   # 숏 진입 허용 RSI 하한
     rsi_bear_max:    float = 60.0   # 숏 진입 허용 RSI 상한
 
@@ -151,10 +151,10 @@ class StrategyConfig:
     """신호 판단 및 점수 전략 설정."""
 
     # signal_engine
-    min_score_to_enter: int = 5        # 진입 허용 최소 점수
+    min_score_to_enter: int = 3        # [테스트 완화] 3 (원래: 5)
 
     # signal_scorer
-    min_confidence:     int = 40       # 진입 허용 최소 신뢰도 (0~100)
+    min_confidence:     int = 15       # [테스트 완화] 15 (원래: 40)
     base_score_max:     int = 22       # signal_engine 보조 점수 최대
     context_score_max:  int = 30       # 맥락 보너스 최대
     penalty_score_max:  int = 30       # 위험 감점 최대
@@ -345,9 +345,9 @@ def _build_config() -> Config:
 
     # ── 전략 파라미터 (선택적 오버라이드) ──────────────────────────────────
     if os.getenv("MIN_SCORE_TO_ENTER"):
-        cfg.strategy.min_score_to_enter = _int("MIN_SCORE_TO_ENTER", 5)
+        cfg.strategy.min_score_to_enter = _int("MIN_SCORE_TO_ENTER", 3)
     if os.getenv("MIN_CONFIDENCE"):
-        cfg.strategy.min_confidence     = _int("MIN_CONFIDENCE", 40)
+        cfg.strategy.min_confidence     = _int("MIN_CONFIDENCE", 15)
     if os.getenv("RISK_PER_TRADE_PCT"):
         cfg.risk.risk_per_trade_pct     = _float("RISK_PER_TRADE_PCT", 0.01)
     if os.getenv("MAX_POSITIONS"):

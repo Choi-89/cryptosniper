@@ -416,8 +416,16 @@ class OrderExecutor:
             logger.error(f"잔고 조회 실패: {e}")
             return 0.0
 
-    def fetch_position_size(self, symbol: str) -> float:
-        """특정 심볼의 현재 포지션 수량(contracts) 조회."""
+    def fetch_position_size(self, symbol: str) -> Optional[float]:
+        """
+        특정 심볼의 현재 포지션 수량(contracts) 조회.
+
+        Returns
+        -------
+        float  : 포지션 수량 (없으면 0.0)
+        None   : API 오류 — 판단 불가 (429, 네트워크 등)
+                 호출자는 None일 때 포지션 없음으로 오판하면 안 됨
+        """
         try:
             positions = self.exchange.fetch_positions([symbol])
             pos_info = next((p for p in positions if p["symbol"] == symbol), None)
@@ -426,7 +434,7 @@ class OrderExecutor:
             return float(pos_info.get("contracts", 0) or 0)
         except Exception as e:
             logger.error(f"[{symbol}] 포지션 조회 실패: {e}")
-            return 0.0
+            return None  # ← API 오류 시 None 반환 (0.0이면 포지션 없음으로 오판)
 
     # ── 내부: 청산 주문 ────────────────────────────────────────────────────────
 

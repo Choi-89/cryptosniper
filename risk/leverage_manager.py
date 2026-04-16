@@ -287,12 +287,8 @@ class LeverageManager:
                 return True
 
         try:
-            # ccxt 심볼 → Binance 마켓 심볼 변환 (예: "BTC/USDT:USDT" → "BTCUSDT")
-            market_id = self._to_market_id(symbol)
-            self.exchange.fapiPrivate_post_leverage({
-                "symbol":   market_id,
-                "leverage": leverage,
-            })
+            # ccxt set_leverage() 사용 (fapiPrivate_post_leverage는 구버전)
+            self.exchange.set_leverage(leverage, symbol)
             self._cache[symbol] = (leverage, time.time())
             logger.info(f"[{symbol}] 거래소 레버리지 설정: {leverage}x")
             return True

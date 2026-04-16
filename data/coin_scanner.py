@@ -50,7 +50,14 @@ MAX_CANDIDATES     = 10
 REQUEST_DELAY      = 0.5
 WATCHLIST_SIZE     = 30
 
-# ── 거래량 급증 감지 상수 ──────────────────────────────────────────────────────
+# ── watchlist 혼합 점수 가중치 ────────────────────────────────────────────────
+# DB 분석 결과: 24시간 거래대금 단일 기준 → BTC/ETH/XRP 등 메이저 코인 위주
+# → 이 종목들은 전략이 원하는 "모멘텀 폭발" 패턴이 약해서 confidence가 매우 낮음
+# 개선: 거래대금(유동성) + 거래량 증가율(모멘텀) 혼합 점수로 선정
+WATCHLIST_VOLUME_WEIGHT    = 0.5   # 24시간 거래대금 가중치
+WATCHLIST_MOMENTUM_WEIGHT  = 0.5   # 거래량 증가율 가중치
+WATCHLIST_MIN_MOMENTUM     = 1.0   # 최소 거래량 증가율 (1.0 = 평균 이상)
+WATCHLIST_MAX_MOMENTUM     = 10.0  # 이상치 방지용 증가율 상한
 SURGE_VOLUME_MULTIPLIER = 5.0    # 직전 평균 대비 몇 배 이상이면 급증으로 판단
 SURGE_MIN_QUOTE_VOLUME  = 500_000  # 급증 감지 최소 거래대금 ($50만, 너무 소형 제외)
 SURGE_WATCHLIST_MINUTES = 60     # 급증 감지 종목을 watchlist에 유지할 시간 (분)
@@ -181,9 +188,10 @@ class CoinScanner:
 
         동작 방식:
           - 전체 티커 1회 REST 호출 (개별 호출 아님 → 빠름)
-          - 심볼별로 직전 N회 quoteVolume 히스토리와 현재값 비교
-          - 현재값이 히스토리 평균의 SURGE_VOLUME_MULTIPLIER배 이상이면 급증으로 판단
-          - 최소 MIN_QUOTE_VOLUME 이상인 종목만 대상
+          - baseVolume(현재 캔들 거래량) 히스토리와 비교
+            → quoteVolume(24시간 누적)은 천천히 변해서 급등 감지 불가
+          - 현재 baseVolume이 히스토리 평균의 SURGE_VOLUME_MULTIPLIER배 이상이면 급증
+          - 최소 quoteVolume 필터는 유지 (극소형 종목 제외용)
 
         Returns
         -------
@@ -204,46 +212,46 @@ class CoinScanner:
             if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
                 continue
 
+            # 최소 24시간 거래대금 필터 (극소형 제외)
             quote_vol = float(ticker.get("quoteVolume") or 0)
-
-            # 최소 거래대금 미달 → 스킵
             if quote_vol < SURGE_MIN_QUOTE_VOLUME:
+                continue
+
+            # ★ 핵심 변경: baseVolume(현재 캔들 거래량)으로 급증 판단
+            # quoteVolume은 24시간 누적이라 1분 급등을 감지 불가
+            base_vol = float(ticker.get("baseVolume") or 0)
+            if base_vol <= 0:
                 continue
 
             # 히스토리 업데이트
             if symbol not in self._ticker_history:
                 self._ticker_history[symbol] = []
             history = self._ticker_history[symbol]
-            history.append(quote_vol)
-
-            # 히스토리가 충분히 쌓이기 전에는 판단하지 않음
-            if len(history) < 5:
-                # 최대 크기 유지
-                if len(history) > self._ticker_history_size:
-                    self._ticker_history[symbol] = history[-self._ticker_history_size:]
-                continue
-
-            # 직전 값들의 평균 (현재값 제외)
-            prev_avg = sum(history[:-1]) / len(history[:-1])
+            history.append(base_vol)
 
             # 최대 크기 유지
             if len(history) > self._ticker_history_size:
                 self._ticker_history[symbol] = history[-self._ticker_history_size:]
 
+            # 히스토리 5회 미만이면 판단 생략
+            if len(history) < 5:
+                continue
+
+            # 직전 값들의 평균 (현재값 제외)
+            prev_values = history[:-1]
+            prev_avg = sum(prev_values) / len(prev_values)
+
             if prev_avg <= 0:
                 continue
 
-            surge_ratio = quote_vol / prev_avg
+            surge_ratio = base_vol / prev_avg
 
             # 급증 감지
             if surge_ratio >= SURGE_VOLUME_MULTIPLIER:
-                # 이미 watchlist에 있으면 추가 불필요
                 if symbol in self._watchlist:
                     continue
-                # 이미 surge_symbols에 있으면 스킵
                 if symbol in self._surge_symbols:
                     continue
-                # 최대 개수 초과 시 스킵
                 if len(self._surge_symbols) >= SURGE_MAX_SYMBOLS:
                     continue
 
@@ -251,9 +259,10 @@ class CoinScanner:
                 newly_detected.append(symbol)
                 logger.info(
                     f"[거래량 급증 감지] {symbol}  "
-                    f"현재={quote_vol/1e6:.1f}M  "
-                    f"평균={prev_avg/1e6:.1f}M  "
+                    f"현재거래량={base_vol:.0f}  "
+                    f"평균거래량={prev_avg:.0f}  "
                     f"배수={surge_ratio:.1f}x  "
+                    f"24H거래대금={quote_vol/1e6:.1f}M  "
                     f"→ watchlist 임시 추가 ({SURGE_WATCHLIST_MINUTES}분간)"
                 )
 
@@ -298,26 +307,84 @@ class CoinScanner:
         return self.exchange.fetch_tickers()
 
     def _rank_by_volume(self, tickers: dict) -> list[str]:
-        scored = []
+        """
+        혼합 점수로 watchlist 상위 종목 선정.
+
+        기존: 24시간 거래대금 단일 기준 정렬
+              → BTC/ETH/XRP 등 메이저 코인 위주 → confidence 낮음 (DB 분석 결과)
+
+        개선: 거래대금(유동성) × 거래량 증가율(모멘텀) 혼합 점수
+              → 유동성은 확보하면서 지금 움직이는 종목을 우선 선정
+              → WATCHLIST_VOLUME_WEIGHT + WATCHLIST_MOMENTUM_WEIGHT = 1.0
+
+        혼합 점수 계산:
+          1. 거래대금 정규화: quote_vol / 전체 평균 (상대 크기)
+          2. 거래량 증가율: baseVolume / 평균 baseVolume 히스토리
+             (히스토리 없으면 1.0으로 처리 — 중립)
+          3. 혼합 점수 = vol_norm^WEIGHT × momentum^WEIGHT
+        """
+        candidates = []
+
         for symbol, ticker in tickers.items():
             if not symbol.endswith("/USDT:USDT"):
                 continue
             base = symbol.split("/")[0]
             if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
                 continue
+            if not base.isascii():
+                continue
             market = self._markets.get(symbol, {})
             if not market.get("active", True):
                 continue
+
             quote_vol = float(ticker.get("quoteVolume") or 0)
             if quote_vol < MIN_QUOTE_VOLUME:
                 continue
-            scored.append((symbol, quote_vol))
+
+            # 거래량 증가율 계산 (히스토리 있으면 사용, 없으면 중립 1.0)
+            momentum = 1.0
+            history = self._ticker_history.get(symbol, [])
+            if len(history) >= 5:
+                base_vol = float(ticker.get("baseVolume") or 0)
+                early_avg = sum(history[:max(5, len(history)//2)]) / max(5, len(history)//2)
+                if early_avg > 0 and base_vol > 0:
+                    raw_momentum = base_vol / early_avg
+                    # 이상치 방지: 상한 클램핑
+                    momentum = min(raw_momentum, WATCHLIST_MAX_MOMENTUM)
+                    momentum = max(momentum, WATCHLIST_MIN_MOMENTUM)
+
+            candidates.append((symbol, quote_vol, momentum))
+
+        if not candidates:
+            return []
+
+        # 거래대금 정규화 (전체 평균 대비)
+        avg_quote = sum(c[1] for c in candidates) / len(candidates)
+
+        scored = []
+        for symbol, quote_vol, momentum in candidates:
+            vol_norm = quote_vol / avg_quote if avg_quote > 0 else 1.0
+
+            # 혼합 점수: 거래대금^0.5 × 모멘텀^0.5
+            # 둘 다 높을수록 높은 점수, 한쪽이 0이면 0
+            mixed = (vol_norm ** WATCHLIST_VOLUME_WEIGHT) * \
+                    (momentum ** WATCHLIST_MOMENTUM_WEIGHT)
+            scored.append((symbol, mixed, quote_vol, momentum))
+
         scored.sort(key=lambda x: x[1], reverse=True)
+
         logger.info(
             f"거래대금 필터 통과: {len(scored)}개 "
-            f"(상위 {WATCHLIST_SIZE}개 선정)"
+            f"(상위 {WATCHLIST_SIZE}개 선정, 혼합점수 기준)"
         )
-        return [s[0] for s in scored]
+        # 상위 WATCHLIST_SIZE개 선정 후 로그
+        top = scored[:WATCHLIST_SIZE]
+        for sym, score, qvol, mom in top[:5]:  # 상위 5개만 로그
+            logger.debug(
+                f"  watchlist 선정: {sym:22s} "
+                f"거래대금={qvol/1e6:.0f}M  모멘텀={mom:.2f}x  혼합={score:.3f}"
+            )
+        return [s[0] for s in top]
 
     def _analyze_symbol(self, symbol: str) -> Optional[dict]:
         ohlcv = self.exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=OHLCV_LIMIT)
