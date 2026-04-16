@@ -3808,3 +3808,103 @@ ValueError: StochRSI 계산 결과 NaN
 2026-04-16 15:17:05 [INFO] main                 피드 시작: 3개 심볼  ['15m', '1h']
 2026-04-16 15:17:05 [INFO] data_fetcher         WebSocket 연결 성공
 2026-04-16 15:17:05 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-16 15:17:48 [INFO] risk_manager         [APR/USDT:USDT] 강제 청산: 거래소 포지션 종료 감지
+2026-04-16 15:21:47 [INFO] main                 정기 스캔 시작...
+2026-04-16 15:21:47 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 30개 + 급증 감지 0개 대상) ===
+2026-04-16 15:22:04 [INFO] coin_scanner         === 스캔 완료: 최종 후보 1개 ===
+2026-04-16 15:22:04 [INFO] coin_scanner           BR/USDT:USDT         | score=3.9 | ADX=33.3 | ATR%=8.97% | VolRatio=1.7x
+2026-04-16 15:22:04 [INFO] main                 스캔 완료: 1개 후보
+2026-04-16 15:22:04 [INFO] main                 심볼 변경 감지  추가=[]  제거=['BLESS/USDT:USDT', 'APR/USDT:USDT']
+2026-04-16 15:22:04 [INFO] data_fetcher         DataFetcher 종료 중...
+2026-04-16 15:22:04 [WARNING] data_fetcher         WebSocket 닫힘 (code=None, msg=None)
+2026-04-16 15:22:04 [INFO] data_fetcher         DataFetcher 종료 완료
+2026-04-16 15:22:04 [INFO] data_fetcher         DataFetcher 시작
+2026-04-16 15:22:04 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-16 15:22:05 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-16 15:22:05 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=blessusdt@kline_15m/blessusdt@kline_1h/...
+2026-04-16 15:22:05 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-16 15:22:05 [INFO] orderbook            OrderBookManager 종료
+2026-04-16 15:22:05 [WARNING] orderbook            호가창 WebSocket 닫힘 (code=None)
+2026-04-16 15:22:05 [INFO] orderbook            OrderBookManager 시작
+2026-04-16 15:22:05 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=blessusdt@depth20@100ms/brusdt@depth20@...
+2026-04-16 15:22:05 [INFO] main                 피드 시작: 2개 심볼  ['15m', '1h']
+2026-04-16 15:22:05 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-16 15:22:05 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-16 15:24:53 [INFO] main                 봇 종료 시작...
+2026-04-16 15:24:53 [INFO] data_fetcher         DataFetcher 종료 중...
+2026-04-16 15:24:53 [WARNING] data_fetcher         WebSocket 닫힘 (code=None, msg=None)
+2026-04-16 15:24:53 [INFO] data_fetcher         DataFetcher 종료 완료
+2026-04-16 15:24:53 [INFO] orderbook            OrderBookManager 종료
+2026-04-16 15:24:53 [WARNING] orderbook            호가창 WebSocket 닫힘 (code=None)
+2026-04-16 15:24:55 [INFO] telegram_notifier    TelegramNotifier 종료 중...
+2026-04-16 15:24:55 [INFO] main                 봇 종료 완료
+2026-04-16 15:25:05 [INFO] db_logger            DbLogger 초기화: C:\Users\0\OneDrive\바탕 화면\jiwhan\cryptosniper\cryptosniper.db
+2026-04-16 15:25:05 [INFO] circuit_breaker      CircuitBreaker 시작  자본=1000.00U  일일손실한도=3.0%  연속손절한도=3회
+2026-04-16 15:25:05 [INFO] main                 ============================================================
+2026-04-16 15:25:05 [INFO] main                   CryptoSniper Bot 시작
+2026-04-16 15:25:05 [INFO] main                   자본: 1,000.00 USDT
+2026-04-16 15:25:05 [INFO] main                   모드: 실거래
+2026-04-16 15:25:05 [INFO] main                   ── 실효 전략 파라미터 ──
+2026-04-16 15:25:05 [INFO] main                   min_score_to_enter : 5
+2026-04-16 15:25:05 [INFO] main                   min_confidence     : 40
+2026-04-16 15:25:05 [INFO] main                   risk_per_trade_pct : 1.0%
+2026-04-16 15:25:05 [INFO] main                   max_positions      : 3
+2026-04-16 15:25:05 [INFO] main                 ============================================================
+2026-04-16 15:25:05 [INFO] telegram_notifier    TelegramNotifier 시작 (bot=cryptoSniper)
+2026-04-16 15:25:05 [INFO] main                 관심 심볼 초기 갱신 중...
+2026-04-16 15:25:05 [INFO] coin_scanner         === 관심 심볼 갱신 시작 ===
+2026-04-16 15:25:05 [INFO] coin_scanner         마켓 정보 로드 중...
+2026-04-16 15:25:06 [INFO] coin_scanner         총 704개 마켓 로드 완료
+2026-04-16 15:25:06 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-16 15:25:08 [INFO] coin_scanner         거래대금 필터 통과: 443개 (상위 30개 선정, 혼합점수 기준)
+2026-04-16 15:25:08 [INFO] coin_scanner         === 관심 심볼 갱신 완료: 30개 ===  (2026-04-16)
+2026-04-16 15:25:08 [INFO] coin_scanner            1. BTC/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            2. ETH/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            3. DOGE/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            4. XRP/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            5. BCH/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            6. BNB/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            7. QUICK/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            8. MYRO/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner            9. LRC/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           10. PUFFER/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           11. FXS/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           12. FUN/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           13. FORTH/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           14. BID/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           15. VOXEL/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           16. BLESS/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           17. GHST/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           18. DMC/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           19. RAVE/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           20. FIS/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           21. CUDIS/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           22. REI/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           23. PLAY/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           24. TOKEN/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           25. ENJ/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           26. PORT3/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           27. 1000X/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           28. BR/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           29. BIO/USDT:USDT
+2026-04-16 15:25:08 [INFO] coin_scanner           30. PONKE/USDT:USDT
+2026-04-16 15:25:08 [INFO] main                 관심 심볼 갱신 완료: 30개  (예: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'DOGE/USDT:USDT']...)
+2026-04-16 15:25:08 [INFO] main                 초기 코인 스캔 시작...
+2026-04-16 15:25:08 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 30개 + 급증 감지 0개 대상) ===
+2026-04-16 15:25:24 [INFO] coin_scanner         === 스캔 완료: 최종 후보 1개 ===
+2026-04-16 15:25:24 [INFO] coin_scanner           BR/USDT:USDT         | score=3.9 | ADX=33.3 | ATR%=8.97% | VolRatio=1.8x
+2026-04-16 15:25:24 [INFO] main                 스캔 완료: 1개 후보
+2026-04-16 15:25:24 [INFO] main                 초기 후보 1개 — watchlist 전체(30개) 구독
+2026-04-16 15:25:24 [INFO] data_fetcher         DataFetcher 시작
+2026-04-16 15:25:24 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-16 15:25:34 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-16 15:25:34 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/ethu...
+2026-04-16 15:25:34 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-16 15:25:34 [INFO] orderbook            OrderBookManager 종료
+2026-04-16 15:25:34 [INFO] orderbook            OrderBookManager 시작
+2026-04-16 15:25:34 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@1...
+2026-04-16 15:25:34 [INFO] main                 피드 시작: 30개 심볼  ['15m', '1h']
+2026-04-16 15:25:34 [INFO] main                 스케줄러 시작 완료
+2026-04-16 15:25:34 [INFO] main                 봇 정상 가동 중... (Ctrl+C 로 종료)
+2026-04-16 15:25:34 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-16 15:25:34 [INFO] orderbook            호가창 WebSocket 연결 성공

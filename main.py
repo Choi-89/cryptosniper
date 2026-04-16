@@ -345,12 +345,10 @@ class CryptoSniperBot:
         if pos:
             exchange_size = self.executor.fetch_position_size(symbol)
             if exchange_size is None:
-                # API 오류 (429 등) — 포지션 없음으로 오판 방지, 이번 사이클 스킵
                 logger.warning(f"[{symbol}] 포지션 조회 API 오류 — 이번 사이클 스킵")
                 return
             if exchange_size <= 0:
-                self.rm.close_position(symbol, reason="거래소 포지션 종료 감지")
-                logger.info(f"[{symbol}] 거래소 포지션 종료 감지 — 로컬 상태 정리")
+                self._close_position_with_notify(symbol, reason="거래소 포지션 종료 감지")
                 return
 
             current_price = self._get_current_price(symbol)
@@ -625,11 +623,10 @@ class CryptoSniperBot:
         for pos in positions:
             exchange_size = self.executor.fetch_position_size(pos.symbol)
             if exchange_size is None:
-                # API 오류 — 포지션 없음으로 오판 방지, 이번 사이클 스킵
                 logger.warning(f"[{pos.symbol}] 포지션 조회 API 오류 — 이번 사이클 스킵")
                 continue
             if exchange_size <= 0:
-                self.rm.close_position(pos.symbol, reason="거래소 포지션 종료 감지")
+                self._close_position_with_notify(pos.symbol, reason="거래소 포지션 종료 감지")
                 continue
             price = self._get_current_price(pos.symbol)
             if price <= 0:
@@ -681,6 +678,47 @@ class CryptoSniperBot:
             logger.error(f"일별 리포트 오류: {e}")
 
     # ── 청산 완료 콜백 ────────────────────────────────────────────────────────
+
+    def _close_position_with_notify(self, symbol: str, reason: str) -> None:
+        """
+        강제 청산 시 로컬 포지션 제거 + DB 기록 + 텔레그램 알림.
+        API 오류로 인한 강제 청산(거래소 포지션 종료 감지 등)에서 호출.
+        """
+        pos = self.rm.get_position(symbol)
+        self.rm.close_position(symbol, reason=reason)
+        logger.info(f"[{symbol}] {reason} — 로컬 상태 정리")
+
+        if pos is None:
+            return
+
+        # 현재가 조회
+        current_price = self._get_current_price(symbol)
+        if current_price <= 0:
+            current_price = pos.entry_price  # fallback
+
+        # PnL 추정 (실제 체결가 없으므로 추정값)
+        direction_mult = 1 if pos.direction == "LONG" else -1
+        pnl_usdt = (current_price - pos.entry_price) * pos.position_size * direction_mult * pos.leverage
+
+        from db_logger import TradeRecord
+        trade = TradeRecord(
+            symbol         = symbol,
+            direction      = pos.direction,
+            entry_price    = pos.entry_price,
+            close_price    = current_price,
+            position_size  = pos.position_size,
+            leverage       = pos.leverage,
+            pnl_usdt       = round(pnl_usdt, 4),
+            fee_usdt       = 0.0,
+            close_reason   = reason,
+            close_order_id = "",
+            atr_at_entry   = pos.atr_at_entry,
+            confidence     = pos.confidence,
+        )
+        self.db.save_trade(trade)
+
+        if self.cfg.notification.notify_close:
+            self.notifier.send_close(trade)
 
     def _on_trade_closed(self, result: OrderResult) -> None:
         """

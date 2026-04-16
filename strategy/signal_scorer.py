@@ -57,8 +57,7 @@ PENALTY_MAX      = 30
 RAW_MAX          = BASE_MAX + CONTEXT_MAX   # 52
 
 # confidence 진입 최소 임계값
-# [테스트 완화] 15 (원래: 40)
-MIN_CONFIDENCE   = 15
+MIN_CONFIDENCE   = 40
 
 # 레버리지 테이블: (confidence 하한, 레버리지)
 LEVERAGE_TABLE = [
@@ -350,14 +349,14 @@ def _calc_penalty(
     else:
         sub("BB하단 근접 (과매도 위험)",  5, trend.near_bb_lower)
 
-    # ADX 경계선 불안정 (25~28 → 추세 성립 불확실) — 이중 처벌 방지를 위해 -2로 완화
-    sub("ADX 경계선 불안정(25~28)",       2, 25 <= trend.adx <= 28)
+    # ADX 경계선 불안정 — ADX 기준을 15로 낮췄으므로 25~28 이중 처벌 제거
+    # [제거] sub("ADX 경계선 불안정(25~28)", 2, 25 <= trend.adx <= 28)
 
     # EMA 200 반대편 — 장기 추세와 역행 진입
     if is_long:
-        sub("EMA200 저항 (현재가<EMA200)", 3, trend.close < trend.ema_long)
+        sub("EMA200 저항 (현재가<EMA200)", 1, trend.close < trend.ema_long)  # [완화] -3→-1: 현재 알트 시장 대부분 EMA200 아래
     else:
-        sub("EMA200 지지 (현재가>EMA200)", 3, trend.close > trend.ema_long)
+        sub("EMA200 지지 (현재가>EMA200)", 1, trend.close > trend.ema_long)  # [완화] -3→-1
 
     # ── 모멘텀 위험 ───────────────────────────────────────────────────────────
 
@@ -394,7 +393,7 @@ def _calc_penalty(
         sub("OBV 매수 우세",               4, volume.obv_rising)
 
     # 거래량 급등 없는 저강도 진입 (배수 1.0~1.5x)
-    sub("거래량 배수 낮음(1.0~1.5x)",     3,
+    sub("거래량 배수 낮음(1.0~1.5x)",     1,  # [완화] -3→-1: 필수조건 제거 후 이중처벌 방지
         1.0 <= volume.volume_ratio < 1.5)
 
     # BB Squeeze 없이 이미 밴드 상단 돌파 상태 (과열 진입)
