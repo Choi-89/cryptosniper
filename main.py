@@ -175,6 +175,11 @@ class CryptoSniperBot:
         self._processing: dict[str, bool] = {}
         self._processing_lock = threading.Lock()
 
+        # 청산 후 쿨다운 {symbol: close_time}
+        # 같은 종목 재진입 시 COOLDOWN_MINUTES 경과 여부 체크
+        self._close_cooldown: dict[str, float] = {}
+        self._cooldown_minutes = 60   # 기본 60분 쿨다운
+
     # ── 라이프사이클 ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -196,6 +201,7 @@ class CryptoSniperBot:
         # 1. 텔레그램 알림 시작
         if self.cfg.notification.telegram_token:
             self.notifier.start()
+            self._register_telegram_commands()
 
         # 2. 관심 심볼 초기 갱신 (REST 대량 호출 — 1회만)
         logger.info("관심 심볼 초기 갱신 중...")
@@ -256,12 +262,22 @@ class CryptoSniperBot:
 
     def _start_feeds(self, symbols: list[str]) -> None:
         """DataFetcher / OrderBookManager 심볼 설정 후 시작."""
+        # 포지션 보유 중인 심볼은 항상 포함 (호가창 유실 방지)
+        position_symbols = {pos.symbol for pos in self.rm.get_all_positions()}
+        all_symbols = list(dict.fromkeys(list(symbols) + list(position_symbols)))
+        if position_symbols - set(symbols):
+            logger.debug(
+                f"포지션 심볼 피드 유지: {position_symbols - set(symbols)}"
+            )
+
         with self._symbols_lock:
-            self._subscribed_symbols = list(symbols)
+            self._subscribed_symbols = list(all_symbols)
+        symbols = all_symbols
 
         timeframes = [
-            self.cfg.strategy.entry_timeframe,   # 15m
+            self.cfg.strategy.entry_timeframe,    # 15m
             self.cfg.strategy.trend_timeframe,    # 1h
+            self.cfg.strategy.confirm_timeframe,  # 5m (눌림목 전략용)
         ]
 
         # DataFetcher
@@ -299,6 +315,7 @@ class CryptoSniperBot:
         15M 캔들 닫힘 시에만 신호 판단 실행.
         (1H 캔들은 추세 데이터로만 사용, 별도 진입 판단 안 함)
         """
+        # 15m 캔들 닫힘 시에만 진입 판단 (5m은 데이터 축적용, 1h는 추세용)
         if timeframe != self.cfg.strategy.entry_timeframe:
             return
 
@@ -340,6 +357,19 @@ class CryptoSniperBot:
             logger.info(f"[{symbol}] CB 차단 중 — 진입 스킵: {cb_status.reason}")
             return
 
+        # 텔레그램 /pause 명령으로 일시 중단 중이면 신규 진입 스킵
+        if getattr(self, "_paused", False):
+            logger.debug(f"[{symbol}] 일시 중단 중 — 진입 스킵")
+            return
+
+        # 쿨다운 체크 — 최근 청산 후 일정 시간 재진입 차단
+        import time as _time
+        cooldown_end = self._close_cooldown.get(symbol, 0)
+        if _time.time() < cooldown_end:
+            remaining = int((cooldown_end - _time.time()) / 60)
+            logger.debug(f"[{symbol}] 쿨다운 중 — {remaining}분 후 재진입 가능")
+            return
+
         # ── Step 2. 포지션 업데이트 ───────────────────────────────────────
         pos = self.rm.get_position(symbol)
         if pos:
@@ -373,6 +403,7 @@ class CryptoSniperBot:
         # ── Step 3. DataFrame 수집 ────────────────────────────────────────
         df_1h  = self.fetcher.get_df(symbol, cfg.strategy.trend_timeframe)
         df_15m = self.fetcher.get_df(symbol, cfg.strategy.entry_timeframe)
+        df_5m  = self.fetcher.get_df(symbol, cfg.strategy.confirm_timeframe)
 
         if df_1h is None or df_15m is None:
             logger.debug(f"[{symbol}] 데이터 미준비 — 스킵")
@@ -392,6 +423,7 @@ class CryptoSniperBot:
             df_1h,
             df_15m,
             btc_df_1h=btc_df_1h,
+            df_5m=df_5m if (df_5m is not None and len(df_5m) >= 30) else None,
             min_score_to_enter=cfg.strategy.min_score_to_enter,
         )
         score = signal_scorer.evaluate(
@@ -493,6 +525,20 @@ class CryptoSniperBot:
             )
 
     # ── 스캔 사이클 ───────────────────────────────────────────────────────────
+
+    def _refresh_watchlist_b(self) -> None:
+        """B군 watchlist 1시간마다 갱신 — 지금 움직이는 종목 교체."""
+        try:
+            if not hasattr(self.scanner, "refresh_watchlist_b"):
+                return
+            watchlist = self.scanner.refresh_watchlist_b()
+            logger.info(f"B군 갱신 완료: watchlist={len(watchlist)}개")
+            # 피드 재구독 (새 종목 추가됐을 수 있음)
+            surge_symbols = set(self.scanner.get_surge_symbols().keys())
+            all_symbols   = list(set(watchlist) | surge_symbols)
+            self._start_feeds(all_symbols)
+        except Exception as e:
+            logger.error(f"B군 갱신 오류: {e}", exc_info=True)
 
     def _refresh_watchlist(self) -> None:
         """
@@ -601,6 +647,15 @@ class CryptoSniperBot:
             name = "일별 리포트",
         )
 
+        # ── 1시간마다: B군 watchlist 갱신 (지금 움직이는 종목 교체)
+        self.scheduler.add_job(
+            self._refresh_watchlist_b,
+            trigger = IntervalTrigger(minutes=60),
+            id      = "watchlist_b_refresh",
+            name    = "B군 watchlist 갱신",
+            misfire_grace_time = 30,
+        )
+
         # ── 5분마다: 잔고 갱신
         self.scheduler.add_job(
             self._refresh_balance,
@@ -677,6 +732,203 @@ class CryptoSniperBot:
         except Exception as e:
             logger.error(f"일별 리포트 오류: {e}")
 
+    # ── 텔레그램 명령 핸들러 ──────────────────────────────────────────────────
+
+    def _register_telegram_commands(self) -> None:
+        n = self.notifier
+        n.register_command("/status",    self._cmd_status)
+        n.register_command("/positions", self._cmd_positions)
+        n.register_command("/watchlist", self._cmd_watchlist)
+        n.register_command("/close",     self._cmd_close)
+        n.register_command("/closeall",  self._cmd_closeall)
+        n.register_command("/pause",     self._cmd_pause)
+        n.register_command("/resume",    self._cmd_resume)
+        n.register_command("/uncool",    self._cmd_uncool)
+        n.register_command("/help",      self._cmd_help)
+        logger.info("텔레그램 명령 핸들러 등록 완료")
+
+    def _cmd_help(self, args: str) -> None:
+        text = (
+            "📋 *CryptoSniper 명령어*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📊 `/status`  봇 상태 요약\n"
+            "💰 `/positions`  보유 포지션\n"
+            "👁 `/watchlist`  감시 종목\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⏹ `/close SYMBOL`  종목 청산\n"
+            "⏹ `/closeall`  전체 청산\n"
+            "⏸ `/pause`  신규 진입 중단\n"
+            "▶️ `/resume`  신규 진입 재개\n"
+            "🔓 `/uncool SYMBOL`  쿨다운 해제 (재진입 허용)"
+        )
+        self.notifier.send_raw(text)
+
+    def _cmd_status(self, args: str) -> None:
+        positions = self.rm.get_all_positions()
+        watchlist = self.scanner.get_watchlist()
+        surge     = self.scanner.get_surge_symbols()
+        cb_status = self.cb.check()
+        paused    = getattr(self, "_paused", False)
+        status_icon = "⏸ 일시중단" if paused else "🟢 가동 중"
+
+        pos_lines = []
+        for pos in positions:
+            price = self._get_current_price(pos.symbol)
+            if price > 0 and pos.entry_price > 0:
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                if pos.direction == "SHORT":
+                    pnl_pct = -pnl_pct
+                pnl_pct *= pos.leverage
+                sign = "+" if pnl_pct >= 0 else ""
+                sym = pos.symbol.split("/")[0]
+                pos_lines.append(
+                    f"  {sym} {pos.direction}x{pos.leverage} "
+                    f"진입={pos.entry_price:.4f} {sign}{pnl_pct:.1f}%"
+                )
+
+        text = (
+            f"🤖 *CryptoSniper 상태*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"상태: {status_icon}\n"
+            f"CB: {'🔴 차단' if cb_status.blocked else '🟢 정상'}\n"
+            f"자본: `{self.rm.total_capital:,.2f} USDT`\n"
+            f"포지션: {len(positions)}개\n"
+        )
+        if pos_lines:
+            text += "\n".join(pos_lines) + "\n"
+        text += f"감시: {len(watchlist)}개"
+        if surge:
+            text += f" +급증 {len(surge)}개"
+
+        buttons = [
+            [
+                {"text": "💰 포지션", "callback_data": "cb_positions"},
+                {"text": "👁 감시목록", "callback_data": "cb_watchlist"},
+            ],
+            [{"text": "⏹ 전체청산", "callback_data": "cb_closeall"}],
+        ]
+        self.notifier.register_callback("cb_positions", lambda: self._cmd_positions(""))
+        self.notifier.register_callback("cb_watchlist", lambda: self._cmd_watchlist(""))
+        self.notifier.register_callback("cb_closeall",  lambda: self._cmd_closeall(""))
+        self.notifier.send_with_keyboard(text, buttons)
+
+    def _cmd_positions(self, args: str) -> None:
+        positions = self.rm.get_all_positions()
+        if not positions:
+            self.notifier.send_raw("📭 현재 보유 포지션 없음")
+            return
+
+        lines = ["💰 *보유 포지션*\n━━━━━━━━━━━━━━━━━━━━"]
+        for pos in positions:
+            price = self._get_current_price(pos.symbol)
+            pnl_pct = 0.0
+            if price > 0 and pos.entry_price > 0:
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                if pos.direction == "SHORT":
+                    pnl_pct = -pnl_pct
+                pnl_pct *= pos.leverage
+            sign  = "+" if pnl_pct >= 0 else ""
+            emoji = "🟢" if pnl_pct >= 0 else "🔴"
+            sym   = pos.symbol.split("/")[0]
+            lines.append(
+                f"{emoji} *{sym}* {pos.direction}x{pos.leverage}\n"
+                f"  진입: `{pos.entry_price:.4f}`  현재: `{price:.4f}`\n"
+                f"  손익: `{sign}{pnl_pct:.2f}%`  SL: `{pos.sl_price:.4f}`"
+            )
+
+        buttons = [
+            [{"text": f"⏹ {pos.symbol.split('/')[0]} 청산",
+              "callback_data": f"close_{pos.symbol}"}]
+            for pos in positions
+        ]
+        for pos in positions:
+            sym = pos.symbol
+            self.notifier.register_callback(
+                f"close_{sym}", lambda s=sym: self._cmd_close(s)
+            )
+        self.notifier.send_with_keyboard("\n".join(lines), buttons)
+
+    def _cmd_watchlist(self, args: str) -> None:
+        watchlist = self.scanner.get_watchlist()
+        surge     = self.scanner.get_surge_symbols()
+        syms = [s.split("/")[0] for s in watchlist]
+        text = f"👁 *감시 중인 종목* ({len(watchlist)}개)\n"
+        text += "  " + "  ".join(syms[:15])
+        if len(syms) > 15:
+            text += "\n  " + "  ".join(syms[15:])
+        if surge:
+            text += f"\n\n⚡ *급증 감지* ({len(surge)}개)\n"
+            for sym, added_at in surge.items():
+                text += f"  {sym.split('/')[0]} ({added_at.strftime('%H:%M')} 추가)\n"
+        self.notifier.send_raw(text)
+
+    def _cmd_close(self, args: str) -> None:
+        symbol = args.strip().upper()
+        if not symbol:
+            self.notifier.send_raw("❌ 사용법: `/close SYMBOL`\n예) `/close APR`")
+            return
+        if "/" not in symbol:
+            symbol = f"{symbol}/USDT:USDT"
+        pos = self.rm.get_position(symbol)
+        if not pos:
+            self.notifier.send_raw(f"❌ `{symbol}` 포지션 없음")
+            return
+        try:
+            # handle_action으로 전량 청산 실행
+            action = {
+                "action": "CLOSE_FULL",
+                "symbol": symbol,
+                "price":  self._get_current_price(symbol),
+                "ratio":  1.0,
+                "reason": "텔레그램 수동 청산",
+            }
+            result = self.executor.handle_action(
+                action,
+                entry_price=pos.entry_price,
+            )
+            if result and result.success:
+                self._close_position_with_notify(symbol, reason="텔레그램 수동 청산")
+                self.notifier.send_raw(f"✅ `{symbol}` 청산 완료")
+            else:
+                self.notifier.send_raw(f"❌ `{symbol}` 청산 실패")
+        except Exception as e:
+            logger.error(f"텔레그램 청산 오류 [{symbol}]: {e}", exc_info=True)
+            self.notifier.send_raw(f"❌ 청산 오류: {e}")
+
+    def _cmd_closeall(self, args: str) -> None:
+        positions = self.rm.get_all_positions()
+        if not positions:
+            self.notifier.send_raw("📭 청산할 포지션 없음")
+            return
+        self.notifier.send_raw(f"⏹ 전체 {len(positions)}개 청산 시작...")
+        for pos in list(positions):
+            self._cmd_close(pos.symbol)
+
+    def _cmd_pause(self, args: str) -> None:
+        self._paused = True
+        self.notifier.send_raw("⏸ 신규 진입 *일시 중단*\n`/resume` 으로 재개")
+        logger.info("텔레그램: 신규 진입 일시 중단")
+
+    def _cmd_resume(self, args: str) -> None:
+        self._paused = False
+        self.notifier.send_raw("▶️ 신규 진입 *재개*")
+        logger.info("텔레그램: 신규 진입 재개")
+
+    def _cmd_uncool(self, args: str) -> None:
+        """특정 종목 쿨다운 해제 — 조정 후 재진입 허용."""
+        symbol = args.strip().upper()
+        if not symbol:
+            self.notifier.send_raw("❌ 사용법: `/uncool SYMBOL`\n예) `/uncool SPACE`")
+            return
+        if "/" not in symbol:
+            symbol = f"{symbol}/USDT:USDT"
+        if symbol in self._close_cooldown:
+            del self._close_cooldown[symbol]
+            self.notifier.send_raw(f"🔓 `{symbol}` 쿨다운 해제 — 재진입 가능")
+            logger.info(f"텔레그램: {symbol} 쿨다운 해제")
+        else:
+            self.notifier.send_raw(f"ℹ️ `{symbol}` 쿨다운 없음")
+
     # ── 청산 완료 콜백 ────────────────────────────────────────────────────────
 
     def _close_position_with_notify(self, symbol: str, reason: str) -> None:
@@ -701,6 +953,7 @@ class CryptoSniperBot:
         pnl_usdt = (current_price - pos.entry_price) * pos.position_size * direction_mult * pos.leverage
 
         from db_logger import TradeRecord
+        from datetime import datetime, timezone
         trade = TradeRecord(
             symbol         = symbol,
             direction      = pos.direction,
@@ -714,11 +967,22 @@ class CryptoSniperBot:
             close_order_id = "",
             atr_at_entry   = pos.atr_at_entry,
             confidence     = pos.confidence,
+            signal_score   = getattr(pos, "signal_score", 0),
+            adx_at_entry   = getattr(pos, "adx_at_entry", 0.0),
+            rsi_at_entry   = getattr(pos, "rsi_at_entry", 0.0),
+            volume_ratio   = getattr(pos, "volume_ratio",  0.0),
+            entry_at       = getattr(pos, "entry_at", ""),
+            close_at       = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
         self.db.save_trade(trade)
 
         if self.cfg.notification.notify_close:
             self.notifier.send_close(trade)
+
+        # 쿨다운 등록
+        import time as _time
+        self._close_cooldown[symbol] = _time.time() + self._cooldown_minutes * 60
+        logger.info(f"[{symbol}] 쿨다운 등록: {self._cooldown_minutes}분")
 
     def _on_trade_closed(self, result: OrderResult) -> None:
         """
@@ -728,6 +992,7 @@ class CryptoSniperBot:
         pos = self.rm.get_position(result.symbol)
         ctx = result.position_context or {}
 
+        from datetime import datetime, timezone
         trade = TradeRecord(
             symbol         = result.symbol,
             direction      = pos.direction if pos else ctx.get("direction", "LONG" if result.side == "sell" else "SHORT"),
@@ -741,11 +1006,22 @@ class CryptoSniperBot:
             close_order_id = result.order_id,
             atr_at_entry   = pos.atr_at_entry if pos else ctx.get("atr_at_entry", 0.0),
             confidence     = pos.confidence if pos else ctx.get("confidence", 0),
+            signal_score   = getattr(pos, "signal_score", 0) if pos else 0,
+            adx_at_entry   = getattr(pos, "adx_at_entry", 0.0) if pos else 0.0,
+            rsi_at_entry   = getattr(pos, "rsi_at_entry", 0.0) if pos else 0.0,
+            volume_ratio   = getattr(pos, "volume_ratio",  0.0) if pos else 0.0,
+            entry_at       = getattr(pos, "entry_at", "") if pos else "",
+            close_at       = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
         self.db.save_trade(trade)
 
         if self.cfg.notification.notify_close:
             self.notifier.send_close(trade)
+
+        # 쿨다운 등록
+        import time as _time
+        self._close_cooldown[result.symbol] = _time.time() + self._cooldown_minutes * 60
+        logger.info(f"[{result.symbol}] 쿨다운 등록: {self._cooldown_minutes}분")
 
     # ── 유틸 ─────────────────────────────────────────────────────────────────
 

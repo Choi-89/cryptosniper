@@ -96,6 +96,11 @@ class Position:
     confidence:     int            = 0
     atr_at_entry:   float          = 0.0
     risk_amount:    float          = 0.0
+    signal_score:   int            = 0
+    adx_at_entry:   float          = 0.0
+    rsi_at_entry:   float          = 0.0
+    volume_ratio:   float          = 0.0
+    entry_at:       str            = ""   # ISO 8601 진입 시각
 
 
 @dataclass
@@ -118,6 +123,10 @@ class PositionPlan:
     confidence:    int
     can_open:      bool       # False 면 진입 불가 (사유: reject_reason)
     reject_reason: str        = ""
+    signal_score:  int        = 0
+    adx_at_entry:  float      = 0.0
+    rsi_at_entry:  float      = 0.0
+    volume_ratio:  float      = 0.0
 
 
 # ── 메인 클래스 ────────────────────────────────────────────────────────────────
@@ -299,6 +308,7 @@ class RiskManager:
             logger.warning(f"[{plan.symbol}] open_position 실패: {plan.reject_reason}")
             return None
 
+        from datetime import datetime, timezone
         pos = Position(
             symbol        = plan.symbol,
             direction     = plan.direction,
@@ -312,6 +322,11 @@ class RiskManager:
             confidence    = plan.confidence,
             atr_at_entry  = plan.atr,
             risk_amount   = plan.risk_amount,
+            signal_score  = getattr(plan, "signal_score",  0),
+            adx_at_entry  = getattr(plan, "adx_at_entry",  0.0),
+            rsi_at_entry  = getattr(plan, "rsi_at_entry",  0.0),
+            volume_ratio  = getattr(plan, "volume_ratio",  0.0),
+            entry_at      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
 
         with self._lock:
@@ -491,6 +506,9 @@ class RiskManager:
             f"notional={notional:.2f}U"
         )
 
+        # 신호 지표 추출 (DB 기록용)
+        _mom = sig.momentum
+        _vol = sig.volume
         return PositionPlan(
             symbol        = symbol,
             direction     = direction,
@@ -505,6 +523,10 @@ class RiskManager:
             atr           = atr,
             confidence    = confidence,
             can_open      = True,
+            signal_score  = sig.score,
+            adx_at_entry  = sig.trend.adx          if sig.trend else 0.0,
+            rsi_at_entry  = _mom.rsi               if _mom      else 0.0,
+            volume_ratio  = _vol.volume_ratio       if _vol      else 0.0,
         )
 
     # ── 내부: 포지션 상태 업데이트 ────────────────────────────────────────────

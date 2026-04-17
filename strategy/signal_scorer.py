@@ -54,7 +54,7 @@ CONTEXT_MAX      = 30
 PENALTY_MAX      = 30
 
 # 이론상 최대 합산
-RAW_MAX          = BASE_MAX + CONTEXT_MAX   # 52
+RAW_MAX          = 28   # 52
 
 # confidence 진입 최소 임계값
 MIN_CONFIDENCE   = 40

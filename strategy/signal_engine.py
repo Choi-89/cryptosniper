@@ -78,10 +78,12 @@ def check(
     df_1h:     pd.DataFrame,
     df_15m:    pd.DataFrame,
     btc_df_1h: Optional[pd.DataFrame] = None,
+    df_5m:     Optional[pd.DataFrame] = None,
     min_score_to_enter: int = MIN_SCORE_TO_ENTER,
 ) -> SignalResult:
     """
     1H + 15M 데이터로 진입 신호를 판단하여 SignalResult 반환.
+    df_5m 이 제공되면 눌림목 전략도 추가로 체크.
 
     Parameters
     ----------
@@ -89,6 +91,7 @@ def check(
     df_1h     : 1시간봉 OHLCV DataFrame  (추세 판단)
     df_15m    : 15분봉  OHLCV DataFrame  (진입 타이밍)
     btc_df_1h : BTC 1시간봉 DataFrame (시장 필터용, None이면 BTC 필터 생략)
+    df_5m     : 5분봉 OHLCV DataFrame (눌림목 전략용, None이면 생략)
 
     Returns
     -------
@@ -158,6 +161,20 @@ def check(
 
     # ── Step 4. 최소 점수 필터 ───────────────────────────────────────────────
     if score < min_score_to_enter:
+        # 점수 부족이지만 눌림목 전략으로 구제 가능한지 체크
+        if df_5m is not None and direction == "LONG":
+            pullback = _check_pullback(symbol, trend_1h, df_5m)
+            if pullback:
+                result.signal        = "LONG"
+                result.passed_required = True
+                result.bonus_details = details
+                result.bonus_details["눌림목 전략"] = 0
+                logger.info(
+                    f"[{symbol}] ★ LONG 신호 확정 [눌림목]  "
+                    f"score={score}/{MAX_SCORE}  price={result.entry_price}"
+                )
+                return result
+
         result.reject_reason = (
             f"점수 부족: {score}/{min_score_to_enter} "
             f"(방향={direction})"
@@ -378,6 +395,79 @@ def _score_short(
 
     return score, details
 
+
+
+# ── 눌림목 전략 체크 ─────────────────────────────────────────────────────────
+
+def _check_pullback(
+    symbol:   str,
+    trend_1h: "TrendResult",
+    df_5m:    "pd.DataFrame",
+) -> bool:
+    """
+    눌림목 매수 조건 체크.
+
+    1시간봉 강한 추세 + 5분봉 과매도 반등 동시 충족 시 True.
+
+    1시간봉 조건 (이미 trend_1h로 전달):
+      - EMA 완전 정배열 (EMA20 > EMA50 > EMA200)
+      - ADX ≥ 35 (강한 추세)
+
+    5분봉 조건:
+      - 직전 캔들 StochRSI K ≤ 20 (과매도 진입 확인)
+      - 현재 캔들 StochRSI K > 20 + K > D (과매도 탈출)
+      - MACD hist 음수 → 양수 전환 중 (macd_bull_cross)
+      - 현재가가 EMA25 ±3% 이내 (지지선 근처)
+
+    Returns
+    -------
+    bool : 눌림목 진입 조건 충족 여부
+    """
+    # 1시간봉: 강한 추세 확인
+    if not trend_1h.ema_aligned_up:
+        return False
+    if trend_1h.adx < 35:
+        return False
+
+    # 5분봉 지표 계산
+    mom_5m = mi.calculate(df_5m)
+    if mom_5m is None:
+        return False
+
+    trend_5m = ti.calculate(df_5m)
+    if trend_5m is None:
+        return False
+
+    # 5분봉 조건 1: StochRSI 과매도 탈출
+    # 직전 K가 20 이하였고 현재 K가 20을 넘으면서 K > D
+    stoch_was_oversold = mom_5m.stoch_k_prev <= 20
+    stoch_recovering   = mom_5m.stoch_k > 20 and mom_5m.stoch_k_above_d
+    if not (stoch_was_oversold and stoch_recovering):
+        return False
+
+    # 5분봉 조건 2: MACD 반전 감지
+    # hist 음수 → 양수 전환 중 (bull_cross) 또는 음수지만 증가 중
+    macd_reversing = mom_5m.macd_bull_cross or (
+        mom_5m.macd_hist < 0 and mom_5m.macd_hist_growing
+    )
+    if not macd_reversing:
+        return False
+
+    # 5분봉 조건 3: 현재가가 EMA25 근처 (±5% 이내)
+    ema25 = trend_5m.ema_mid
+    if ema25 > 0:
+        dist = abs(trend_5m.close - ema25) / ema25
+        if dist > 0.05:
+            return False
+
+    logger.info(
+        f"[{symbol}] 눌림목 조건 충족  "
+        f"ADX={trend_1h.adx:.1f}  "
+        f"StochK={mom_5m.stoch_k:.1f}(prev={mom_5m.stoch_k_prev:.1f})  "
+        f"MACD_bull={mom_5m.macd_bull_cross}  "
+        f"EMA25거리={dist*100:.1f}%"
+    )
+    return True
 
 
 # ── BTC 시장 방향 필터 ────────────────────────────────────────────────────────

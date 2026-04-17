@@ -33,15 +33,18 @@ from typing import Optional
 
 import requests
 
-from utils.db_logger import TradeRecord, DailyStats
-from risk.circuit_breaker import HaltEvent
+from db_logger       import TradeRecord, DailyStats
+from circuit_breaker import HaltEvent
 
 # ── 로거 ───────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("telegram_notifier")
 
 
 # ── 상수 ───────────────────────────────────────────────────────────────────────
-TELEGRAM_API   = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_API        = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_API_BASE   = "https://api.telegram.org/bot{token}"  # polling용
+POLLING_TIMEOUT     = 30   # long polling 타임아웃 (초)
+POLLING_INTERVAL    = 0.5  # 폴링 루프 sleep (초)
 MAX_MSG_LEN    = 4096          # Telegram 메시지 최대 길이
 MAX_RETRY      = 3
 RETRY_DELAY    = 1.0           # 재시도 초기 대기 (초)
@@ -76,6 +79,7 @@ class TelegramMessage:
     level:      NotifyLevel = NotifyLevel.NORMAL
     msg_type:   str         = ""
     parse_mode: str         = "Markdown"
+    extra_data: dict        = None   # 인라인 키보드 등 추가 파라미터
 
 
 # ── 메인 클래스 ────────────────────────────────────────────────────────────────
@@ -135,10 +139,18 @@ class TelegramNotifier:
         # Heartbeat 스레드
         self._hb_thread: Optional[threading.Thread] = None
 
+        # Polling 스레드 (명령 수신)
+        self._poll_thread: Optional[threading.Thread] = None
+        self._update_offset: int = 0   # getUpdates offset
+
+        # 명령 핸들러 콜백 {command: callable}
+        self._command_handlers: dict = {}
+        self._callback_handlers: dict = {}  # 인라인 버튼 콜백 {data: callable}
+
     # ── 라이프사이클 ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """백그라운드 전송 스레드 시작."""
+        """백그라운드 전송 스레드 + polling 스레드 시작."""
         self._running = True
         self._thread = threading.Thread(
             target=self._worker, daemon=True, name="tg-sender"
@@ -149,6 +161,13 @@ class TelegramNotifier:
             target=self._heartbeat_loop, daemon=True, name="tg-heartbeat"
         )
         self._hb_thread.start()
+
+        # 명령 polling 스레드
+        self._poll_thread = threading.Thread(
+            target=self._polling_loop, daemon=True, name="tg-polling"
+        )
+        self._poll_thread.start()
+        logger.info("TelegramNotifier polling 시작")
 
         logger.info(f"TelegramNotifier 시작 (bot={self._bot_name})")
         self._enqueue(TelegramMessage(
@@ -408,14 +427,17 @@ class TelegramNotifier:
 
         for attempt in range(1, MAX_RETRY + 1):
             try:
+                payload = {
+                    "chat_id":    self._chat_id,
+                    "text":       text,
+                    "parse_mode": msg.parse_mode,
+                    "disable_web_page_preview": True,
+                }
+                if msg.extra_data:
+                    payload.update(msg.extra_data)
                 resp = requests.post(
                     self._url,
-                    json={
-                        "chat_id":    self._chat_id,
-                        "text":       text,
-                        "parse_mode": msg.parse_mode,
-                        "disable_web_page_preview": True,
-                    },
+                    json=payload,
                     timeout=10,
                 )
                 data = resp.json()
@@ -454,6 +476,147 @@ class TelegramNotifier:
 
         logger.error(f"텔레그램 최종 전송 실패 (type={msg.msg_type})")
         return False
+
+    # ── 퍼블릭: 명령 핸들러 등록 ─────────────────────────────────────────────
+
+    def register_command(self, command: str, handler) -> None:
+        """
+        텔레그램 명령어 핸들러 등록.
+
+        Parameters
+        ----------
+        command : "/status", "/positions" 등 슬래시 포함
+        handler : fn(args: str) → None  (args는 명령어 뒤 텍스트)
+        """
+        self._command_handlers[command.lower()] = handler
+
+    def register_callback(self, data: str, handler) -> None:
+        """
+        인라인 버튼 콜백 핸들러 등록.
+
+        Parameters
+        ----------
+        data    : 버튼의 callback_data 값
+        handler : fn() → None
+        """
+        self._callback_handlers[data] = handler
+
+    def send_with_keyboard(
+        self,
+        text: str,
+        buttons: list[list[dict]],
+        level: "NotifyLevel" = None,
+    ) -> None:
+        """
+        인라인 키보드 버튼과 함께 메시지 전송.
+
+        Parameters
+        ----------
+        buttons : [[{"text": "버튼명", "callback_data": "data"}, ...], ...]
+        """
+        if level is None:
+            level = NotifyLevel.NORMAL
+        import json
+        keyboard = {"inline_keyboard": buttons}
+        self._enqueue(TelegramMessage(
+            text       = text,
+            level      = level,
+            msg_type   = "keyboard",
+            extra_data = {"reply_markup": json.dumps(keyboard)},
+        ))
+
+    # ── 내부: polling 루프 ────────────────────────────────────────────────────
+
+    def _polling_loop(self) -> None:
+        """getUpdates long polling — 명령 및 버튼 콜백 수신."""
+        base_url = TELEGRAM_API_BASE.format(token=self._token)
+        logger.debug("polling 루프 시작")
+
+        while self._running:
+            try:
+                resp = requests.get(
+                    f"{base_url}/getUpdates",
+                    params={
+                        "offset":  self._update_offset,
+                        "timeout": POLLING_TIMEOUT,
+                        "allowed_updates": ["message", "callback_query"],
+                    },
+                    timeout=POLLING_TIMEOUT + 5,
+                )
+                data = resp.json()
+
+                if not data.get("ok"):
+                    time.sleep(POLLING_INTERVAL)
+                    continue
+
+                for update in data.get("result", []):
+                    self._update_offset = update["update_id"] + 1
+                    self._handle_update(update)
+
+            except requests.Timeout:
+                pass  # long polling 정상 타임아웃
+            except Exception as e:
+                logger.warning(f"polling 오류: {e}")
+                time.sleep(5)
+
+    def _handle_update(self, update: dict) -> None:
+        """수신된 update 처리 — 명령어 또는 버튼 콜백."""
+        # ── 텍스트 명령 ───────────────────────────────────────────────────────
+        message = update.get("message", {})
+        text    = message.get("text", "")
+        chat_id = str(message.get("chat", {}).get("id", ""))
+
+        if text and chat_id == self._chat_id:
+            parts   = text.strip().split(maxsplit=1)
+            command = parts[0].lower()
+            args    = parts[1] if len(parts) > 1 else ""
+
+            # @봇이름 접미사 제거
+            if "@" in command:
+                command = command.split("@")[0]
+
+            handler = self._command_handlers.get(command)
+            if handler:
+                try:
+                    logger.info(f"명령 수신: {command} {args}")
+                    handler(args)
+                except Exception as e:
+                    logger.error(f"명령 처리 오류 [{command}]: {e}", exc_info=True)
+                    self.send_raw(f"⚠️ 명령 처리 오류: {e}", NotifyLevel.HIGH)
+            elif text.startswith("/"):
+                self.send_raw(
+                    f"❓ 알 수 없는 명령입니다: `{command}`\n/help 로 명령어 목록을 확인하세요.",
+                    NotifyLevel.NORMAL,
+                )
+
+        # ── 인라인 버튼 콜백 ──────────────────────────────────────────────────
+        callback_query = update.get("callback_query", {})
+        if callback_query:
+            cb_chat_id = str(callback_query.get("message", {})
+                             .get("chat", {}).get("id", ""))
+            cb_data    = callback_query.get("data", "")
+            cb_id      = callback_query.get("id", "")
+
+            # 버튼 응답 (로딩 표시 제거)
+            try:
+                base_url = TELEGRAM_API_BASE.format(token=self._token)
+                requests.post(
+                    f"{base_url}/answerCallbackQuery",
+                    json={"callback_query_id": cb_id},
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+            if cb_chat_id == self._chat_id:
+                handler = self._callback_handlers.get(cb_data)
+                if handler:
+                    try:
+                        logger.info(f"버튼 콜백 수신: {cb_data}")
+                        handler()
+                    except Exception as e:
+                        logger.error(f"버튼 콜백 오류 [{cb_data}]: {e}")
+                        self.send_raw(f"⚠️ 처리 오류: {e}", NotifyLevel.HIGH)
 
     # ── 내부: 하트비트 루프 ────────────────────────────────────────────────────
 

@@ -37,7 +37,7 @@ import pandas_ta as ta
 logger = logging.getLogger("coin_scanner")
 
 # ── 기존 상수 ──────────────────────────────────────────────────────────────────
-MIN_QUOTE_VOLUME   = 200_000_000
+MIN_QUOTE_VOLUME   = 200_000_000  # A군 최소 거래대금 ($2억)
 MIN_ATR_RATIO      = 0.015
 VOLUME_SURGE_RATIO = 1.2
 MIN_ADX            = 25
@@ -49,6 +49,13 @@ TIMEFRAME          = "1h"
 MAX_CANDIDATES     = 10
 REQUEST_DELAY      = 0.5
 WATCHLIST_SIZE     = 30
+
+# ── A군 / B군 분리 watchlist 상수 ──────────────────────────────────────────────
+WATCHLIST_A_SIZE        = 15     # A군: 유동성 안정 종목 수
+WATCHLIST_B_SIZE        = 15     # B군: 지금 움직이는 종목 수
+WATCHLIST_B_MIN_QUOTE   = 5_000_000   # B군 최소 거래대금 ($500만, 저유동성 차단)
+WATCHLIST_B_REFRESH_MIN = 60     # B군 갱신 주기 (분)
+WATCHLIST_B_VOLUME_LOOKBACK = 24 # B군 판단 기준: 최근 N시간 대비 현재 1시간 배수
 
 # ── watchlist 혼합 점수 가중치 ────────────────────────────────────────────────
 # DB 분석 결과: 24시간 거래대금 단일 기준 → BTC/ETH/XRP 등 메이저 코인 위주
@@ -99,22 +106,77 @@ class CoinScanner:
         self._ticker_history: dict[str, list[float]] = {}
         self._ticker_history_size = 20   # 20회 평균으로 판단
 
+        # A군/B군 분리 관리
+        self._watchlist_a: list[str] = []   # 유동성 안정 종목 (자정 갱신)
+        self._watchlist_b: list[str] = []   # 지금 움직이는 종목 (1시간 갱신)
+        self._watchlist_b_updated: Optional[datetime] = None
+
     # ── 퍼블릭 메서드 ──────────────────────────────────────────────────────────
 
     def refresh_watchlist(self) -> list[str]:
-        logger.info("=== 관심 심볼 갱신 시작 ===")
+        """
+        A군 + B군 혼합 watchlist 갱신.
+
+        A군 (WATCHLIST_A_SIZE=15개): 24시간 거래대금 상위 — 유동성 안정
+        B군 (WATCHLIST_B_SIZE=15개): 최근 1시간 거래량 증가율 상위 — 지금 움직이는 종목
+
+        호출 주기:
+          - A군: 자정 1회 (main.py CronTrigger)
+          - B군: 1시간마다 (main.py IntervalTrigger)
+          - 이 메서드는 두 군 모두 갱신 (초기 시작 시 또는 강제 갱신 시)
+        """
+        logger.info("=== 관심 심볼 갱신 시작 (A군+B군) ===")
         if not self._markets:
             self._load_markets()
         tickers = self._fetch_tickers()
-        volume_ranked = self._rank_by_volume(tickers)
-        self._watchlist      = volume_ranked[:WATCHLIST_SIZE]
+
+        # A군: 거래대금 상위 (유동성 안정)
+        self._watchlist_a = self._select_group_a(tickers)
+
+        # B군: 지금 움직이는 종목
+        self._watchlist_b = self._select_group_b(tickers, exclude=set(self._watchlist_a))
+        self._watchlist_b_updated = datetime.now()
+
+        # 합산 (중복 제거)
+        combined = list(dict.fromkeys(self._watchlist_a + self._watchlist_b))
+        self._watchlist      = combined
         self._watchlist_date = date.today()
+
         logger.info(
-            f"=== 관심 심볼 갱신 완료: {len(self._watchlist)}개 ===  "
-            f"({self._watchlist_date})"
+            f"=== 관심 심볼 갱신 완료: {len(self._watchlist)}개 "
+            f"(A군={len(self._watchlist_a)} B군={len(self._watchlist_b)}) ==="
         )
-        for i, sym in enumerate(self._watchlist, 1):
-            logger.info(f"  {i:>2}. {sym}")
+        logger.info(f"  A군: {[s.split('/')[0] for s in self._watchlist_a]}")
+        logger.info(f"  B군: {[s.split('/')[0] for s in self._watchlist_b]}")
+        return self._watchlist
+
+    def refresh_watchlist_b(self) -> list[str]:
+        """
+        B군만 갱신 — 1시간마다 호출.
+        지금 막 움직이기 시작한 종목을 실시간으로 교체.
+        """
+        if not self._markets:
+            self._load_markets()
+        tickers = self._fetch_tickers()
+
+        new_b = self._select_group_b(tickers, exclude=set(self._watchlist_a))
+        added   = set(new_b) - set(self._watchlist_b)
+        removed = set(self._watchlist_b) - set(new_b)
+
+        self._watchlist_b = new_b
+        self._watchlist_b_updated = datetime.now()
+
+        # watchlist 재합산
+        combined = list(dict.fromkeys(self._watchlist_a + self._watchlist_b))
+        self._watchlist = combined
+
+        if added or removed:
+            logger.info(
+                f"B군 갱신: +{[s.split('/')[0] for s in added]} "
+                f"-{[s.split('/')[0] for s in removed]}"
+            )
+        else:
+            logger.debug("B군 갱신: 변경 없음")
         return self._watchlist
 
     def scan(self) -> list[dict]:
@@ -305,6 +367,102 @@ class CoinScanner:
     def _fetch_tickers(self) -> dict:
         logger.info("전체 티커 조회 중...")
         return self.exchange.fetch_tickers()
+
+    def _select_group_a(self, tickers: dict) -> list[str]:
+        """
+        A군 선정 — 24시간 거래대금 상위 WATCHLIST_A_SIZE개.
+        유동성 안정 종목. MIN_QUOTE_VOLUME($2억) 이상만.
+        """
+        scored = []
+        for symbol, ticker in tickers.items():
+            if not symbol.endswith("/USDT:USDT"):
+                continue
+            base = symbol.split("/")[0]
+            if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
+                continue
+            if not base.isascii():
+                continue
+            market = self._markets.get(symbol, {})
+            if not market.get("active", True):
+                continue
+            quote_vol = float(ticker.get("quoteVolume") or 0)
+            if quote_vol < MIN_QUOTE_VOLUME:
+                continue
+            scored.append((symbol, quote_vol))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        result = [s[0] for s in scored[:WATCHLIST_A_SIZE]]
+        logger.debug(f"A군 선정: {len(result)}개 ({[s.split('/')[0] for s in result]})")
+        return result
+
+    def _select_group_b(self, tickers: dict, exclude: set = None) -> list[str]:
+        """
+        B군 선정 — 지금 이 시간에 유독 많이 거래되는 종목 WATCHLIST_B_SIZE개.
+
+        선정 기준:
+          recent_ratio = baseVolume(현재) / (quoteVolume / 24)
+          = 현재 1시간 거래량 / 24시간 평균 1시간 거래량
+          이 값이 높을수록 "지금 막 터지는 중"인 종목
+
+        MIN_QUOTE_VOLUME보다 낮아도 WATCHLIST_B_MIN_QUOTE 이상이면 포함
+        → NEIRO처럼 아직 24시간 거래대금은 낮지만 지금 폭발하는 종목 포착
+        """
+        if exclude is None:
+            exclude = set()
+
+        scored = []
+        for symbol, ticker in tickers.items():
+            if not symbol.endswith("/USDT:USDT"):
+                continue
+            if symbol in exclude:
+                continue
+            base = symbol.split("/")[0]
+            if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
+                continue
+            if not base.isascii():
+                continue
+            market = self._markets.get(symbol, {})
+            if not market.get("active", True):
+                continue
+
+            quote_vol = float(ticker.get("quoteVolume") or 0)
+            base_vol  = float(ticker.get("baseVolume") or 0)
+            last_price = float(ticker.get("last") or ticker.get("close") or 0)
+
+            # B군 최소 거래대금 필터 (A군보다 낮음 — 저유동성만 차단)
+            if quote_vol < WATCHLIST_B_MIN_QUOTE:
+                continue
+            if base_vol <= 0 or last_price <= 0:
+                continue
+
+            # 현재 1시간 거래량(USDT) 추정
+            # baseVolume × 현재가 ≈ 지금 이 캔들의 거래대금
+            current_1h_usdt = base_vol * last_price
+
+            # 24시간 평균 1시간 거래대금
+            avg_1h_usdt = quote_vol / WATCHLIST_B_VOLUME_LOOKBACK
+            if avg_1h_usdt <= 0:
+                continue
+
+            # 현재 1시간이 평균 대비 몇 배인지
+            recent_ratio = current_1h_usdt / avg_1h_usdt
+
+            # 최소 1.5배 이상인 종목만 (평균보다 50% 이상 많이 거래 중)
+            if recent_ratio < 1.5:
+                continue
+
+            scored.append((symbol, recent_ratio, quote_vol))
+
+        # recent_ratio 내림차순 정렬
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        result = [s[0] for s in scored[:WATCHLIST_B_SIZE]]
+        if result:
+            top3 = [(s[0].split('/')[0], f"{s[1]:.1f}x") for s in scored[:3]]
+            logger.info(f"B군 선정: {len(result)}개  상위3={top3}")
+        else:
+            logger.info("B군 선정: 0개 (조건 충족 종목 없음)")
+        return result
 
     def _rank_by_volume(self, tickers: dict) -> list[str]:
         """

@@ -202,9 +202,9 @@ class LeverageManager:
         # ── Step 3. 리스크 상태 승수 (손실률 + 연속 손절) ─────────────────────
         risk_mult = _calc_risk_mult(cb_status, reasons)
 
-        # ── Step 4. 승수 적용 후 내림 ─────────────────────────────────────────
+        # ── Step 4. 승수 적용 후 반올림 ─────────────────────────────────────
         adjusted = base * market_mult * risk_mult
-        floored  = max(MIN_LEVERAGE, int(adjusted))   # 소수점 버림
+        floored  = max(MIN_LEVERAGE, round(adjusted))   # 반올림 (1.8x → 2x)
 
         # ── Step 5. 심볼 상한 클램핑 ─────────────────────────────────────────
         sym_max      = _symbol_max(symbol)
