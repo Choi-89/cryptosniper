@@ -80,19 +80,19 @@ class CoinScanner:
         testnet: bool = False,
         demo: bool = False,
     ):
-        self.exchange = ccxt.binanceusdm({
+        exchange_cfg = {
             "apiKey":  api_key,
             "secret":  api_secret,
             "options": {
                 "defaultType":     "future",
-                "fetchCurrencies": False,
+                "fetchCurrencies": False,     # Spot SAPI 호출 차단
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-            "urls": DEMO_TRADING_URLS,
-        })
-        if demo:
-            self.exchange.urls.update(DEMO_TRADING_URLS)
+        }
+        if demo or testnet:
+            exchange_cfg["urls"] = DEMO_TRADING_URLS
+        self.exchange = ccxt.binanceusdm(exchange_cfg)
 
         self._markets: dict = {}
         self._watchlist: list[str] = []

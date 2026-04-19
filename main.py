@@ -139,6 +139,8 @@ class CryptoSniperBot:
             tp2_ratio            = self.cfg.risk.tp2_ratio,
             tp1_close_pct        = self.cfg.risk.tp1_close_pct,
             trailing_trigger_pct = self.cfg.risk.trailing_trigger_pct,
+            max_notional_pct     = self.cfg.risk.max_notional_pct,
+            max_notional_abs     = self.cfg.risk.max_notional_abs,
         )
         self.lm = LeverageManager(
             api_key    = self.cfg.exchange.api_key,
@@ -385,19 +387,26 @@ class CryptoSniperBot:
             if current_price > 0:
                 actions = self.rm.update_positions({symbol: current_price})
                 for action in actions:
-                    # 트레일링 스탑(CLOSE_FULL, TP2 이후)만 로컬에서 처리
-                    if action.get("reason", "").startswith("트레일링"):
-                        self.executor.handle_action(
+                    # SL 손절 / TP1 50% 익절 / TP2 전량 익절 모두 처리
+                    act_type = action.get("action", "")
+                    if act_type in ("CLOSE_FULL", "CLOSE_PARTIAL", "MOVE_SL"):
+                        result = self.executor.handle_action(
                             action,
                             entry_price=pos.entry_price,
                             position_context={
-                                "direction": pos.direction,
-                                "entry_price": pos.entry_price,
-                                "leverage": pos.leverage,
+                                "direction":    pos.direction,
+                                "entry_price":  pos.entry_price,
+                                "leverage":     pos.leverage,
                                 "atr_at_entry": pos.atr_at_entry,
-                                "confidence": pos.confidence,
+                                "confidence":   pos.confidence,
                             },
                         )
+                        if result and result.success:
+                            logger.info(
+                                f"[{symbol}] 청산 완료  "
+                                f"사유={action.get('reason')}  "
+                                f"price={current_price:.4f}"
+                            )
             return
 
         # ── Step 3. DataFrame 수집 ────────────────────────────────────────
@@ -688,18 +697,31 @@ class CryptoSniperBot:
                 continue
             actions = self.rm.update_positions({pos.symbol: price})
             for action in actions:
-                if action.get("reason", "").startswith("트레일링"):
-                    self.executor.handle_action(
+                # ★ SIMPLE MODE: CLOSE_FULL / CLOSE_PARTIAL 모두 즉시 실행
+                # ★ TRAILING MODE로 전환 시:
+                #   if action.get("reason", "").startswith("트레일링"): 조건 복원
+                act = action.get("action", "")
+                if act in ("CLOSE_FULL", "CLOSE_PARTIAL"):
+                    result = self.executor.handle_action(
                         action,
                         entry_price=pos.entry_price,
                         position_context={
-                            "direction": pos.direction,
-                            "entry_price": pos.entry_price,
-                            "leverage": pos.leverage,
+                            "direction":    pos.direction,
+                            "entry_price":  pos.entry_price,
+                            "leverage":     pos.leverage,
                             "atr_at_entry": pos.atr_at_entry,
-                            "confidence": pos.confidence,
+                            "confidence":   pos.confidence,
                         },
                     )
+                    if result and result.success:
+                        if act == "CLOSE_FULL":
+                            self._close_position_with_notify(
+                                pos.symbol,
+                                reason=action.get("reason", "청산")
+                            )
+                # MOVE_SL은 TRAILING MODE에서만 사용 (현재 비활성)
+                # elif act == "MOVE_SL":
+                #     self.executor.handle_action(action, entry_price=pos.entry_price)
 
     def _refresh_balance(self) -> None:
         """5분마다 USDT 잔고를 거래소에서 조회해 자본 갱신."""
@@ -1074,6 +1096,138 @@ def _clone_score_with_leverage(score, leverage: int):
 # 진입점
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def _verify_api_key(cfg) -> bool:
+    """
+    바이낸스 API 키 유효성 사전 검증.
+    봇 시작 전에 호출하여 키 오류를 조기에 발견.
+
+    체크 항목:
+      1. API 키 / Secret 공백 여부
+      2. 실거래 vs Demo 모드 일치 여부
+      3. 실제 API 호출 (잔고 조회) 성공 여부
+      4. Futures 권한 여부
+    """
+    import ccxt
+
+    key    = cfg.exchange.api_key
+    secret = cfg.exchange.api_secret
+    import os
+    demo    = os.getenv("USE_DEMO", "false").lower() == "true"
+    testnet = cfg.exchange.testnet
+
+    print("=" * 50)
+    print("  바이낸스 API 키 검증 중...")
+    print("=" * 50)
+
+    # ── 1. 키 공백 체크 ───────────────────────────────
+    if not key or not secret:
+        print("❌ API 키 또는 Secret이 비어있습니다.")
+        print("   .env 파일에서 API_KEY, API_SECRET을 확인하세요.")
+        return False
+
+    print(f"  모드    : {'Demo Trading' if demo else ('테스트넷' if testnet else '실거래')}")
+    print(f"  API Key : {key[:8]}...{key[-4:]}")
+
+    # ── 2. Demo 모드 경고 ─────────────────────────────
+    if demo:
+        print("  ⚠️  Demo Trading 모드입니다. 실거래 전환 시 USE_DEMO=false로 변경하세요.")
+
+    # ── 3. 실제 API 연결 테스트 ───────────────────────
+    try:
+        exchange_cfg = {
+            "apiKey":         key,
+            "secret":         secret,
+            "enableRateLimit": True,
+            "options": {
+                "defaultType":              "future",
+                "adjustForTimeDifference":  True,
+            },
+        }
+        if testnet:
+            exchange_cfg["urls"] = {
+                "api": {
+                    "fapiPublic":    "https://testnet.binancefuture.com/fapi/v1",
+                    "fapiPrivate":   "https://testnet.binancefuture.com/fapi/v1",
+                    "fapiPublicV2":  "https://testnet.binancefuture.com/fapi/v2",
+                    "fapiPrivateV2": "https://testnet.binancefuture.com/fapi/v2",
+                }
+            }
+        if demo:
+            exchange_cfg["options"]["portfolioMargin"] = False
+            exchange_cfg["headers"] = {"X-MBX-APIKEY": key}
+            exchange_cfg["urls"] = {
+                "api": {
+                    "fapiPublic":    "https://testnet.binancefuture.com/fapi/v1",
+                    "fapiPrivate":   "https://testnet.binancefuture.com/fapi/v1",
+                    "fapiPublicV2":  "https://testnet.binancefuture.com/fapi/v2",
+                    "fapiPrivateV2": "https://testnet.binancefuture.com/fapi/v2",
+                }
+            }
+
+        exchange = ccxt.binanceusdm(exchange_cfg)
+
+        # 잔고 조회로 키 유효성 검증
+        balance = exchange.fetch_balance()
+        usdt = float(balance.get("USDT", {}).get("free", 0) or 0)
+        print(f"  ✅ API 연결 성공")
+        print(f"  잔고    : {usdt:.2f} USDT")
+
+    except ccxt.AuthenticationError as e:
+        print(f"❌ API 인증 실패: {e}")
+        if not demo:
+            print("   → 실거래 API 키인지 확인하세요.")
+            print("   → 바이낸스 프로필 > API Management에서 발급한 키를 사용해야 합니다.")
+            print("   → Demo Trading 키는 실거래에서 사용 불가합니다.")
+        else:
+            print("   → Demo Trading 키를 확인하세요.")
+            print("   → 바이낸스 선물 > Demo Trading > API Management에서 발급한 키를 사용해야 합니다.")
+        return False
+
+    except ccxt.PermissionDenied as e:
+        print(f"❌ API 권한 부족: {e}")
+        print("   → API 키에서 'Enable Futures' 권한을 활성화하세요.")
+        return False
+
+    except ccxt.NetworkError as e:
+        print(f"⚠️  네트워크 오류 (API 키 검증 생략): {e}")
+        print("   → 인터넷 연결을 확인하세요. 봇은 계속 시작합니다.")
+        return True  # 네트워크 오류는 봇 시작 막지 않음
+
+    except Exception as e:
+        err = str(e)
+        if "-2015" in err:
+            print(f"❌ API 권한 오류 (-2015): {e}")
+            print("   → IP 제한 또는 권한 문제입니다.")
+            print("   → 1. API 키 IP 제한 설정 확인 (현재 IP 등록 여부)")
+            print("   → 2. Demo 키를 실거래에 사용하고 있지 않은지 확인")
+            print("   → 3. Enable Futures 권한 활성화 확인")
+            return False
+        elif "-1021" in err:
+            print(f"⚠️  서버 시간 불일치: {e}")
+            print("   → Windows 시간 동기화: 설정 > 시간 및 언어 > '지금 동기화'")
+            return False
+        else:
+            print(f"⚠️  API 검증 중 예외 발생: {e}")
+            print("   → 봇은 계속 시작합니다.")
+            return True
+
+    # ── 4. Futures 권한 확인 ──────────────────────────
+    try:
+        exchange.fetch_positions(["BTC/USDT:USDT"])
+        print(f"  ✅ Futures 권한 확인")
+    except ccxt.PermissionDenied:
+        print("❌ Futures 권한 없음")
+        print("   → API 키에서 'Enable Futures'를 체크하세요.")
+        return False
+    except Exception:
+        pass  # 포지션 조회 실패는 권한 이외 이유일 수 있음
+
+    print("=" * 50)
+    print("  ✅ API 키 검증 완료 — 봇을 시작합니다.")
+    print("=" * 50)
+    return True
+
+
 def main() -> None:
     """main() — 설정 로드 후 봇 시작."""
 
@@ -1086,6 +1240,11 @@ def main() -> None:
 
     # 로깅 초기화
     _setup_logging(cfg.system.log_level, cfg.system.log_file)
+
+    # ── API 키 사전 검증 ──────────────────────────────
+    if not _verify_api_key(cfg):
+        print("\n봇 시작을 중단합니다. 위 오류를 해결 후 다시 실행하세요.")
+        sys.exit(1)
 
     # SIGTERM 처리 (systemd / Docker 종료 신호)
     bot = CryptoSniperBot()

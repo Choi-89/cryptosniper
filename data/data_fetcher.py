@@ -112,7 +112,7 @@ class DataFetcher:
         self.on_closed_candle = on_closed_candle
 
         # REST 클라이언트 (초기 데이터 로드용)
-        self.exchange = ccxt.binanceusdm({
+        exchange_cfg = {
             "apiKey":  api_key,
             "secret":  api_secret,
             "options": {
@@ -121,10 +121,10 @@ class DataFetcher:
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
-        })
-        if demo:
-            self.exchange.urls.update(DEMO_TRADING_URLS)
+        }
+        if demo or testnet:
+            exchange_cfg["urls"] = DEMO_TRADING_URLS
+        self.exchange = ccxt.binanceusdm(exchange_cfg)
 
         # DataFrame 저장소: _store[symbol][timeframe] = pd.DataFrame
         self._store: dict[str, dict[str, pd.DataFrame]] = defaultdict(dict)

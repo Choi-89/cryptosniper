@@ -164,7 +164,7 @@ class OrderExecutor:
         on_order_filled  : 모든 주문 체결 콜백  fn(OrderResult)
         testnet          : True 이면 테스트넷 사용
         """
-        self.exchange = ccxt.binanceusdm({
+        exchange_cfg = {
             "apiKey":  api_key,
             "secret":  api_secret,
             "options": {
@@ -173,10 +173,10 @@ class OrderExecutor:
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
-        })
-        if demo:
-            self.exchange.urls.update(DEMO_TRADING_URLS)
+        }
+        if demo or testnet:
+            exchange_cfg["urls"] = DEMO_TRADING_URLS
+        self.exchange = ccxt.binanceusdm(exchange_cfg)
 
 
         self._rm   = risk_manager

@@ -160,11 +160,15 @@ class RiskManager:
         tp2_ratio: float = 4.0,
         tp1_close_pct: float = 0.5,
         trailing_trigger_pct: float = 0.01,
+        max_notional_pct: float = 0.30,
+        max_notional_abs: float = 500.0,
     ):
         """
         Parameters
         ----------
-        total_capital : 운용 총 자본 (USDT). 실시간 잔고로 주기적 갱신 필요.
+        total_capital    : 운용 총 자본 (USDT). 실시간 잔고로 주기적 갱신 필요.
+        max_notional_pct : 단일 포지션 명목가치 상한 (자본 대비 비율, 기본 30%)
+        max_notional_abs : 단일 포지션 명목가치 절대 상한 (USDT, 0이면 비활성)
         """
         self.total_capital = total_capital
         self.risk_per_trade_pct = risk_per_trade_pct
@@ -175,6 +179,8 @@ class RiskManager:
         self.tp2_ratio = tp2_ratio
         self.tp1_close_pct = tp1_close_pct
         self.trailing_trigger_pct = trailing_trigger_pct
+        self._max_notional_pct = max_notional_pct
+        self._max_notional_abs = max_notional_abs
 
         # 활성 포지션 저장소 {symbol: Position}
         self._positions: dict[str, Position] = {}
@@ -293,6 +299,7 @@ class RiskManager:
             atr=atr,
             leverage=leverage,
             confidence=confidence,
+            sig=sig,
         )
 
     def open_position(self, plan: PositionPlan) -> Optional[Position]:
@@ -475,6 +482,7 @@ class RiskManager:
         atr:         float,
         leverage:    int,
         confidence:  int,
+        sig=None,
     ) -> PositionPlan:
         """SL / TP / 포지션 크기 계산 후 PositionPlan 반환."""
 
@@ -497,6 +505,23 @@ class RiskManager:
         size     = _calc_position_size(risk_amount, sl_distance, leverage, entry_price)
         notional = size * entry_price
 
+        # ── 명목가치 상한 클램핑 ──────────────────────────────────────────────
+        # 레버리지가 높아도 단일 포지션 명목가치(= 실제 코인 가치)를 제한
+        # ARPA(4x) 같은 케이스: risk 30U → size 과대 → notional 2,100U → 손실 폭발
+        notional_cap = self.total_capital * getattr(self, "_max_notional_pct", 0.30)
+        notional_abs = getattr(self, "_max_notional_abs", 500.0)
+        if notional_abs > 0:
+            notional_cap = min(notional_cap, notional_abs)
+
+        if notional > notional_cap:
+            logger.info(
+                f"[{symbol}] 명목가치 클램핑: "
+                f"{notional:.2f}U → {notional_cap:.2f}U "
+                f"(자본={self.total_capital:.0f}U × 상한={notional_cap/self.total_capital*100:.0f}%)"
+            )
+            size     = notional_cap / entry_price
+            notional = notional_cap
+
         logger.debug(
             f"[{symbol}] 플랜 계산  "
             f"risk={risk_amount:.2f}U  "
@@ -506,9 +531,9 @@ class RiskManager:
             f"notional={notional:.2f}U"
         )
 
-        # 신호 지표 추출 (DB 기록용)
-        _mom = sig.momentum
-        _vol = sig.volume
+        # 신호 지표 추출 (DB 기록용) — sig가 None이면 기본값 사용
+        _mom = sig.momentum if sig else None
+        _vol = sig.volume   if sig else None
         return PositionPlan(
             symbol        = symbol,
             direction     = direction,
@@ -523,10 +548,10 @@ class RiskManager:
             atr           = atr,
             confidence    = confidence,
             can_open      = True,
-            signal_score  = sig.score,
-            adx_at_entry  = sig.trend.adx          if sig.trend else 0.0,
-            rsi_at_entry  = _mom.rsi               if _mom      else 0.0,
-            volume_ratio  = _vol.volume_ratio       if _vol      else 0.0,
+            signal_score  = sig.score                  if sig        else 0,
+            adx_at_entry  = sig.trend.adx              if sig and sig.trend else 0.0,
+            rsi_at_entry  = _mom.rsi                   if _mom       else 0.0,
+            volume_ratio  = _vol.volume_ratio           if _vol       else 0.0,
         )
 
     # ── 내부: 포지션 상태 업데이트 ────────────────────────────────────────────
@@ -537,29 +562,35 @@ class RiskManager:
         price: float,
     ) -> list[dict]:
         """
-        단일 포지션에 대해 현재가로 상태를 평가하고 액션 목록 반환.
+        단일 포지션 평가 후 액션 반환.
 
-        상태 전이:
-          OPEN
-            → SL 도달      : 전량 손절 (CLOSE_FULL)
-            → TP1 도달     : 50% 청산 + SL → 진입가 이동 (CLOSE_PARTIAL + MOVE_SL)
-            → TP2 도달     : 트레일링 스탑 활성 (state → TP2_HIT)
-          TP1_HIT
-            → SL(=진입가) 도달: 나머지 50% 청산 (CLOSE_FULL)
-            → TP2 도달       : 트레일링 스탑 활성
-          TP2_HIT
-            → 트레일링 발동  : 전량 청산 (CLOSE_FULL)
-            → 고점 갱신      : trailing_high 업데이트
+        ★ 현재: SIMPLE MODE 활성
+          OPEN 상태:
+            SL 도달  → CLOSE_FULL  (전량 손절)
+            TP2 도달 → CLOSE_FULL  (전량 익절)
+            TP1 도달 → CLOSE_PARTIAL 50% → TP1_HIT 상태로 전환
+          TP1_HIT 상태:
+            SL 도달  → CLOSE_FULL  (나머지 50% 손절)
+            TP2 도달 → CLOSE_FULL  (나머지 50% 익절)
+
+        ★ 나중에 트레일링으로 전환하려면:
+          이 함수 하단 "TRAILING MODE" 주석 블록을 해제하고
+          "SIMPLE MODE" 블록을 주석 처리할 것.
         """
         actions = []
         is_long = pos.direction == "LONG"
 
-        # ── OPEN 상태 ─────────────────────────────────────────────────────────
+        # ══════════════════════════════════════════════════════
+        # ★ SIMPLE MODE (현재 활성)
+        # ══════════════════════════════════════════════════════
+
         if pos.state == PositionState.OPEN:
 
-            # SL 도달
-            if (is_long  and price <= pos.sl_price) or \
-               (not is_long and price >= pos.sl_price):
+            # SL 도달 → 전량 손절
+            if (is_long     and price <= pos.sl_price) or                (not is_long and price >= pos.sl_price):
+                actions.append(_make_action(
+                    "CLOSE_FULL", pos.symbol, price, 1.0, "SL 손절"
+                ))
                 pos.state = PositionState.CLOSED
                 logger.info(
                     f"[{pos.symbol}] 손절  "
@@ -567,93 +598,114 @@ class RiskManager:
                 )
                 return actions
 
-            # TP2 먼저 체크 (TP1/TP2 동시 돌파 방지)
-            if (is_long  and price >= pos.tp2_price) or \
-               (not is_long and price <= pos.tp2_price):
-                # TP1 + TP2 동시 도달 → 50% 청산 + 트레일링 활성
-                pos.remaining_ratio = 1.0 - self.tp1_close_pct
-                pos.sl_price        = pos.entry_price
-                pos.trailing_high   = price
-                pos.state           = PositionState.TP2_HIT
-                logger.info(
-                    f"[{pos.symbol}] TP2 직행  "
-                    f"거래소 브래킷 처리 가정, 트레일링 활성"
-                )
+            # TP2 먼저 체크 (TP1/TP2 동시 돌파 방지) → 전량 익절
+            if (is_long     and price >= pos.tp2_price) or                (not is_long and price <= pos.tp2_price):
+                actions.append(_make_action(
+                    "CLOSE_FULL", pos.symbol, price, 1.0, "TP2 전량 익절"
+                ))
+                pos.state = PositionState.CLOSED
+                logger.info(f"[{pos.symbol}] TP2 전량 익절  price={price:.4f}")
                 return actions
 
-            # TP1 도달
-            if (is_long  and price >= pos.tp1_price) or \
-               (not is_long and price <= pos.tp1_price):
+            # TP1 도달 → 50% 익절
+            if (is_long     and price >= pos.tp1_price) or                (not is_long and price <= pos.tp1_price):
+                actions.append(_make_action(
+                    "CLOSE_PARTIAL", pos.symbol, price,
+                    self.tp1_close_pct, "TP1 50% 익절"
+                ))
                 pos.remaining_ratio = 1.0 - self.tp1_close_pct
-                pos.sl_price        = pos.entry_price
                 pos.state           = PositionState.TP1_HIT
-                logger.info(
-                    f"[{pos.symbol}] TP1 도달  "
-                    f"거래소 브래킷 처리 가정, 상태만 동기화"
-                )
+                logger.info(f"[{pos.symbol}] TP1 50% 익절  price={price:.4f}")
 
-        # ── TP1_HIT 상태 ──────────────────────────────────────────────────────
         elif pos.state == PositionState.TP1_HIT:
 
-            # SL (= 진입가) 도달 → 나머지 50% 본전 청산
-            if (is_long  and price <= pos.sl_price) or \
-               (not is_long and price >= pos.sl_price):
+            # SL 도달 → 나머지 50% 손절
+            if (is_long     and price <= pos.sl_price) or                (not is_long and price >= pos.sl_price):
+                actions.append(_make_action(
+                    "CLOSE_FULL", pos.symbol, price,
+                    pos.remaining_ratio, "SL 손절 (TP1 이후)"
+                ))
                 pos.state = PositionState.CLOSED
-                logger.info(f"[{pos.symbol}] 본전 청산  price={price:.4f}")
+                logger.info(f"[{pos.symbol}] TP1 이후 손절  price={price:.4f}")
                 return actions
 
-            # TP2 도달 → 트레일링 활성
-            if (is_long  and price >= pos.tp2_price) or \
-               (not is_long and price <= pos.tp2_price):
-                pos.trailing_high = price
-                pos.state         = PositionState.TP2_HIT
-                logger.info(
-                    f"[{pos.symbol}] TP2 도달  트레일링 스탑 활성  "
-                    f"trailing_high={price:.4f}"
-                )
+            # TP2 도달 → 나머지 50% 전량 익절
+            if (is_long     and price >= pos.tp2_price) or                (not is_long and price <= pos.tp2_price):
+                actions.append(_make_action(
+                    "CLOSE_FULL", pos.symbol, price,
+                    pos.remaining_ratio, "TP2 나머지 전량 익절"
+                ))
+                pos.state = PositionState.CLOSED
+                logger.info(f"[{pos.symbol}] TP2 나머지 전량 익절  price={price:.4f}")
 
-        # ── TP2_HIT 상태 — 트레일링 스탑 ─────────────────────────────────────
-        elif pos.state == PositionState.TP2_HIT:
+        # ══════════════════════════════════════════════════════
+        # ★ TRAILING MODE (비활성화 — 나중에 사용)
+        #
+        # 활성화 방법:
+        #   1. 아래 주석 전체 해제
+        #   2. 위 SIMPLE MODE 블록 전체 주석 처리
+        #
+        # TRAILING MODE 동작:
+        #   OPEN:
+        #     SL 도달      → CLOSE_FULL (전량 손절)
+        #     TP2 직행     → CLOSE_PARTIAL 50% + SL→진입가 + 트레일링 활성 (TP2_HIT)
+        #     TP1 도달     → CLOSE_PARTIAL 50% + MOVE_SL(진입가) → TP1_HIT
+        #   TP1_HIT:
+        #     SL(진입가) 도달 → CLOSE_FULL (본전 청산)
+        #     TP2 도달        → 트레일링 활성 (TP2_HIT)
+        #   TP2_HIT:
+        #     고점/저점 갱신  → trailing_high 업데이트
+        #     트레일링 발동   → CLOSE_FULL
+        # ══════════════════════════════════════════════════════
 
-            if is_long:
-                # 고점 갱신
-                if price > pos.trailing_high:
-                    pos.trailing_high = price
-                # 고점 대비 -TRAILING_TRIGGER_PCT 이탈
-                trail_stop = pos.trailing_high * (1 - self.trailing_trigger_pct)
-                if price <= trail_stop:
-                    actions.append(_make_action(
-                        "CLOSE_FULL", pos.symbol, price,
-                        pos.remaining_ratio,
-                        f"트레일링 발동 (고점={pos.trailing_high:.4f})"
-                    ))
-                    pos.state = PositionState.CLOSED
-                    logger.info(
-                        f"[{pos.symbol}] 트레일링 청산  "
-                        f"high={pos.trailing_high:.4f}  price={price:.4f}"
-                    )
-            else:
-                # 저점 갱신
-                if price < pos.trailing_high:
-                    pos.trailing_high = price
-                # 저점 대비 +TRAILING_TRIGGER_PCT 상승
-                trail_stop = pos.trailing_high * (1 + self.trailing_trigger_pct)
-                if price >= trail_stop:
-                    actions.append(_make_action(
-                        "CLOSE_FULL", pos.symbol, price,
-                        pos.remaining_ratio,
-                        f"트레일링 발동 (저점={pos.trailing_high:.4f})"
-                    ))
-                    pos.state = PositionState.CLOSED
-                    logger.info(
-                        f"[{pos.symbol}] 트레일링 청산  "
-                        f"low={pos.trailing_high:.4f}  price={price:.4f}"
-                    )
+        # if pos.state == PositionState.OPEN:
+        #     # SL → 전량 손절
+        #     if (is_long and price <= pos.sl_price) or (not is_long and price >= pos.sl_price):
+        #         actions.append(_make_action("CLOSE_FULL", pos.symbol, price, 1.0, "SL 손절"))
+        #         pos.state = PositionState.CLOSED
+        #         return actions
+        #     # TP2 직행 → 50% 청산 + 트레일링 활성
+        #     if (is_long and price >= pos.tp2_price) or (not is_long and price <= pos.tp2_price):
+        #         actions.append(_make_action("CLOSE_PARTIAL", pos.symbol, price, self.tp1_close_pct, "TP2 직행 50%"))
+        #         pos.remaining_ratio = 1.0 - self.tp1_close_pct
+        #         pos.sl_price        = pos.entry_price
+        #         pos.trailing_high   = price
+        #         pos.state           = PositionState.TP2_HIT
+        #         return actions
+        #     # TP1 → 50% 청산 + SL 진입가 이동
+        #     if (is_long and price >= pos.tp1_price) or (not is_long and price <= pos.tp1_price):
+        #         actions.append(_make_action("CLOSE_PARTIAL", pos.symbol, price, self.tp1_close_pct, "TP1 50%"))
+        #         actions.append(_make_action("MOVE_SL", pos.symbol, pos.entry_price, 1.0, "SL→진입가"))
+        #         pos.remaining_ratio = 1.0 - self.tp1_close_pct
+        #         pos.sl_price        = pos.entry_price
+        #         pos.state           = PositionState.TP1_HIT
+        #
+        # elif pos.state == PositionState.TP1_HIT:
+        #     # SL(진입가) → 본전 청산
+        #     if (is_long and price <= pos.sl_price) or (not is_long and price >= pos.sl_price):
+        #         actions.append(_make_action("CLOSE_FULL", pos.symbol, price, pos.remaining_ratio, "본전 청산"))
+        #         pos.state = PositionState.CLOSED
+        #         return actions
+        #     # TP2 → 트레일링 활성
+        #     if (is_long and price >= pos.tp2_price) or (not is_long and price <= pos.tp2_price):
+        #         pos.trailing_high = price
+        #         pos.state         = PositionState.TP2_HIT
+        #
+        # elif pos.state == PositionState.TP2_HIT:
+        #     if is_long:
+        #         if price > pos.trailing_high:
+        #             pos.trailing_high = price
+        #         if price <= pos.trailing_high * (1 - self.trailing_trigger_pct):
+        #             actions.append(_make_action("CLOSE_FULL", pos.symbol, price, pos.remaining_ratio, "트레일링 발동"))
+        #             pos.state = PositionState.CLOSED
+        #     else:
+        #         if price < pos.trailing_high:
+        #             pos.trailing_high = price
+        #         if price >= pos.trailing_high * (1 + self.trailing_trigger_pct):
+        #             actions.append(_make_action("CLOSE_FULL", pos.symbol, price, pos.remaining_ratio, "트레일링 발동"))
+        #             pos.state = PositionState.CLOSED
 
         return actions
-
-
-# ── 순수 함수: 포지션 크기 계산 ────────────────────────────────────────────────
 
 def _calc_position_size(
     risk_amount:  float,

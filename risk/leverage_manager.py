@@ -152,7 +152,7 @@ class LeverageManager:
         testnet:    bool = False,
         demo:       bool = False,
     ):
-        self.exchange = ccxt.binanceusdm({
+        exchange_cfg = {
             "apiKey":  api_key,
             "secret":  api_secret,
             "options": {
@@ -161,10 +161,10 @@ class LeverageManager:
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-            "urls": DEMO_TRADING_URLS,        # ← 생성 시 바로 주입
-        })
-        if demo:
-            self.exchange.urls.update(DEMO_TRADING_URLS)
+        }
+        if demo or testnet:
+            exchange_cfg["urls"] = DEMO_TRADING_URLS
+        self.exchange = ccxt.binanceusdm(exchange_cfg)
 
         # {symbol: (leverage, set_at)} — 캐시
         self._cache: dict[str, tuple[int, float]] = {}

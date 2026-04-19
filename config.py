@@ -182,7 +182,7 @@ class RiskConfig:
     initial_capital:     float = 1000.0    # 초기 운용 자본 (USDT)
     risk_per_trade_pct:  float = 0.01      # 1회 최대 손실 비율 (1%)
     max_positions:       int   = 3         # 최대 동시 포지션 수
-    min_position_usdt:   float = 10.0      # 최소 포지션 크기 (USDT)
+    min_position_usdt:   float = 5.0      # 최소 포지션 크기 (USDT)
 
     # SL / TP
     atr_sl_multiplier:    float = 1.5      # SL 거리 = ATR × 1.5
@@ -194,6 +194,12 @@ class RiskConfig:
     # 레버리지 전역 한도
     min_leverage: int = 1
     max_leverage: int = 10
+
+    # 포지션 명목가치 상한 (USDT)
+    # 레버리지가 높아도 단일 포지션 명목가치를 이 값으로 제한
+    # 예: 자본 1000 USDT × 30% = 300 USDT 명목 상한
+    max_notional_pct: float = 0.30   # 자본 대비 단일 포지션 명목가치 상한 (30%)
+    max_notional_abs: float = 500.0  # 절대 상한 (USDT), 0이면 비활성
 
     # 심볼별 최대 레버리지
     symbol_max_leverage: dict = field(default_factory=lambda: {
