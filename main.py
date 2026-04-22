@@ -74,6 +74,9 @@ def _setup_logging(log_level: str, log_file: str) -> None:
     root = logging.getLogger()
     root.setLevel(level)
 
+    # 기존 핸들러 제거 (재시작 시 중복 핸들러 누적 방지)
+    root.handlers.clear()
+
     # 콘솔 핸들러
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(logging.Formatter(fmt, datefmt))
@@ -209,19 +212,25 @@ class CryptoSniperBot:
         logger.info("관심 심볼 초기 갱신 중...")
         self._refresh_watchlist()
 
-        # 3. 관심 심볼 기반 초기 스캔 (30개 대상)
+        # 3. 거래소 열린 포지션 복구 (재시작 시 기존 포지션 동기화)
+        self._restore_positions()
+
+        # 4. 관심 심볼 기반 초기 스캔 (30개 대상)
         logger.info("초기 코인 스캔 시작...")
         candidates = self._run_scan()
         # 수정안 2: 후보 유무와 관계없이 watchlist 전체를 기본 구독
         # scanner 후보는 우선순위 참고용이지, 감시 범위를 축소하지 않음
         watchlist_symbols = self.scanner.get_watchlist() or ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+        # 복구된 포지션 심볼도 피드에 포함
+        restored_symbols = {pos.symbol for pos in self.rm.get_all_positions()}
+        watchlist_symbols = list(set(watchlist_symbols) | restored_symbols)
         if not candidates:
             logger.warning("초기 스캔에서 후보 코인 없음 — 관심 심볼 전체로 시작")
         else:
             logger.info(f"초기 후보 {len(candidates)}개 — watchlist 전체({len(watchlist_symbols)}개) 구독")
         self._start_feeds(watchlist_symbols)
 
-        # 4. 스케줄러 등록
+        # 5. 스케줄러 등록
         self._register_schedules()
         self.scheduler.start()
         logger.info("스케줄러 시작 완료")
@@ -535,8 +544,49 @@ class CryptoSniperBot:
 
     # ── 스캔 사이클 ───────────────────────────────────────────────────────────
 
+    def _surge_scan_loop(self) -> None:
+        """
+        1분마다 실행 — 거래량 급증 종목 감지 후 즉시 스캔 트리거.
+
+        기존 정기 스캔(5분)과 별개로 급증 감지 시 즉시 해당 종목의
+        신호를 체크하여 급등 초입 포착 타이밍을 앞당김.
+
+        흐름:
+          detect_volume_surge() → 새로 감지된 종목 필터링
+          → _start_feeds()에 추가 (WebSocket 구독)
+          → 각 종목 즉시 _process_signal() 호출
+        """
+        try:
+            new_surges = self.scanner.detect_volume_surge()
+            if not new_surges:
+                return
+
+            # 이미 watchlist에 있는 종목 제외 (새로 감지된 것만)
+            current = set(self.scanner.get_watchlist())
+            truly_new = [s for s in new_surges if s not in current]
+            if not truly_new:
+                return
+
+            logger.info(f"⚡ 급증 감지 → 즉시 스캔: {[s.split('/')[0] for s in truly_new]}")
+
+            # 피드 구독 추가
+            all_symbols = list(set(self.scanner.get_watchlist()) |
+                               set(new_surges) |
+                               {pos.symbol for pos in self.rm.get_all_positions()})
+            self._start_feeds(all_symbols)
+
+            # 즉시 신호 체크 (캔들 닫힘 기다리지 않고 현재 데이터로)
+            for symbol in truly_new:
+                try:
+                    self._process_signal(symbol)
+                except Exception as e:
+                    logger.debug(f"[{symbol}] 급증 즉시 스캔 오류: {e}")
+
+        except Exception as e:
+            logger.error(f"급증 스캔 루프 오류: {e}", exc_info=True)
+
     def _refresh_watchlist_b(self) -> None:
-        """B군 watchlist 1시간마다 갱신 — 지금 움직이는 종목 교체."""
+        """B군 watchlist 30분마다 갱신 — 지금 움직이는 종목 교체."""
         try:
             if not hasattr(self.scanner, "refresh_watchlist_b"):
                 return
@@ -548,6 +598,162 @@ class CryptoSniperBot:
             self._start_feeds(all_symbols)
         except Exception as e:
             logger.error(f"B군 갱신 오류: {e}", exc_info=True)
+
+    def _restore_positions(self) -> None:
+        """
+        봇 재시작 시 거래소에서 열린 포지션을 조회하여 RiskManager에 복구.
+
+        왜 필요한가:
+          봇 재시작 시 RiskManager 메모리가 초기화됨
+          → 기존 포지션을 봇이 모르는 상태
+          → TP/SL 체결 시 DB 기록 안 됨, 텔레그램 알림 안 됨
+          → 같은 종목 중복 진입 가능
+
+        복구 방식:
+          거래소 fetch_positions() → size > 0 포지션 → Position 객체 생성
+          단, SL/TP 가격은 거래소 open orders에서 조회
+          알 수 없는 값(confidence, atr 등)은 기본값으로 채움
+        """
+        logger.info("=== 거래소 포지션 복구 시작 ===")
+        try:
+            positions = self.executor.exchange.fetch_positions()
+        except Exception as e:
+            logger.warning(f"포지션 복구 실패 (거래소 조회 오류): {e}")
+            return
+
+        restored = 0
+        for pos_info in positions:
+            size = float(pos_info.get("contracts", 0) or 0)
+            if size <= 0:
+                continue
+
+            symbol     = pos_info.get("symbol", "")
+            side       = pos_info.get("side", "long")
+            direction  = "LONG" if side == "long" else "SHORT"
+            entry_price = float(pos_info.get("entryPrice") or
+                                pos_info.get("info", {}).get("entryPrice", 0) or 0)
+            # 레버리지: ccxt는 info.leverage에 실제 값이 있음
+            _lev_raw = (
+                pos_info.get("info", {}).get("leverage") or
+                pos_info.get("leverage") or 1
+            )
+            leverage = max(1, int(float(_lev_raw)))
+            notional   = float(pos_info.get("notional") or
+                               pos_info.get("info", {}).get("notional", 0) or 0)
+
+            if entry_price <= 0:
+                logger.warning(f"[{symbol}] 포지션 복구 스킵: 진입가 없음")
+                continue
+
+            # 미체결 주문에서 SL/TP 가격 조회
+            # 바이낸스 선물의 Stop/TP 주문은 일반 open_orders가 아닌
+            # 조건부 주문(conditional orders)으로 분류됨
+            # → params={"type": "future"} 추가 또는 fapiPrivate API 직접 호출
+            sl_price = tp1_price = tp2_price = 0.0
+            try:
+                # 방법 1: 일반 미체결 주문 조회
+                open_orders = self.executor.exchange.fetch_open_orders(symbol)
+                # 방법 2: 바이낸스 선물 전용 조건부 주문 조회 (Stop/TP)
+                # 바이낸스 선물 심볼 변환: "NAORIS/USDT:USDT" → "NAORIUSUSDT"
+                # ccxt의 market_id 사용이 가장 정확
+                try:
+                    market = self.executor.exchange.market(symbol)
+                    bn_symbol = market.get("id", symbol.split("/")[0] + "USDT")
+                except Exception:
+                    bn_symbol = symbol.split("/")[0] + "USDT"
+
+                try:
+                    cond_orders = self.executor.exchange.fapiPrivateGetOpenOrders(
+                        {"symbol": bn_symbol}
+                    )
+                    logger.debug(
+                        f"[{symbol}] 조건부 주문 조회: {len(cond_orders) if isinstance(cond_orders, list) else type(cond_orders)} "
+                        f"(심볼={bn_symbol})"
+                    )
+                    if isinstance(cond_orders, list):
+                        for raw in cond_orders:
+                            open_orders.append({
+                                "type": raw.get("type", "").lower(),
+                                "stopPrice": raw.get("stopPrice", 0),
+                                "info": raw,
+                            })
+                except Exception as ce:
+                    logger.debug(f"[{symbol}] 조건부 주문 조회 실패: {ce}")
+
+                tp_prices = []
+                logger.debug(f"[{symbol}] 전체 주문 {len(open_orders)}건 파싱 시작")
+                for order in open_orders:
+                    order_type = str(order.get("type", "")).lower()
+                    stop_price = float(
+                        order.get("stopPrice") or
+                        order.get("info", {}).get("stopPrice") or 0
+                    )
+                    logger.debug(
+                        f"[{symbol}] 주문: type={order_type} stopPrice={stop_price}"
+                    )
+                    if stop_price <= 0:
+                        continue
+                    if "stop_market" in order_type or order_type == "stop":
+                        sl_price = stop_price
+                    elif "take_profit" in order_type:
+                        tp_prices.append(stop_price)
+
+                # TP 가격 정렬 (LONG: 낮은게 TP1, 높은게 TP2 / SHORT: 반대)
+                tp_prices.sort(reverse=(direction == "SHORT"))
+                if len(tp_prices) >= 1:
+                    tp1_price = tp_prices[0]
+                if len(tp_prices) >= 2:
+                    tp2_price = tp_prices[1]
+
+            except Exception as e:
+                logger.warning(f"[{symbol}] 미체결 주문 조회 실패: {e}")
+
+            # SL/TP 없으면 ATR 기반 추정 (안전 기본값)
+            if sl_price <= 0:
+                sl_price = entry_price * (0.97 if direction == "LONG" else 1.03)
+                logger.warning(f"[{symbol}] SL 정보 없음 — 기본값 사용: {sl_price:.5f}")
+            if tp1_price <= 0:
+                tp1_price = entry_price * (1.06 if direction == "LONG" else 0.94)
+            if tp2_price <= 0:
+                tp2_price = entry_price * (1.12 if direction == "LONG" else 0.88)
+
+            # Position 객체 생성 후 RiskManager에 등록
+            from risk_manager import Position, PositionState
+            import time as _t
+            pos = Position(
+                symbol        = symbol,
+                direction     = direction,
+                entry_price   = entry_price,
+                position_size = size,
+                leverage      = leverage,
+                sl_price      = round(sl_price, 6),
+                tp1_price     = round(tp1_price, 6),
+                tp2_price     = round(tp2_price, 6),
+                trailing_high = entry_price,
+                state         = PositionState.OPEN,
+                confidence    = 0,    # 알 수 없음
+                atr_at_entry  = 0.0,  # 알 수 없음
+                entry_at      = "",
+            )
+            self.rm._positions[symbol] = pos
+            restored += 1
+
+            logger.info(
+                f"[{symbol}] 포지션 복구 완료  "
+                f"{direction} x{leverage}  "
+                f"진입가={entry_price:.5f}  size={size:.4f}  "
+                f"SL={sl_price:.5f}  TP1={tp1_price:.5f}  TP2={tp2_price:.5f}"
+            )
+            if self.cfg.notification.telegram_token:
+                self.notifier.send_raw(
+                    f"♻️ 포지션 복구: *{symbol.split('/')[0]}* {direction} x{leverage}\n"
+                    f"  진입가: `{entry_price:.5f}`  SL: `{sl_price:.5f}`"
+                )
+
+        if restored == 0:
+            logger.info("=== 복구할 포지션 없음 ===")
+        else:
+            logger.info(f"=== 포지션 복구 완료: {restored}개 ===")
 
     def _refresh_watchlist(self) -> None:
         """
@@ -656,13 +862,23 @@ class CryptoSniperBot:
             name = "일별 리포트",
         )
 
-        # ── 1시간마다: B군 watchlist 갱신 (지금 움직이는 종목 교체)
+        # ── 30분마다: B군 watchlist 갱신 (지금 움직이는 종목 교체)
+        # 60분 → 30분으로 단축: 급등 초입 종목을 더 빠르게 watchlist에 포함
         self.scheduler.add_job(
             self._refresh_watchlist_b,
-            trigger = IntervalTrigger(minutes=60),
+            trigger = IntervalTrigger(minutes=30),
             id      = "watchlist_b_refresh",
             name    = "B군 watchlist 갱신",
             misfire_grace_time = 30,
+        )
+
+        # ── 1분마다: 거래량 급증 감지 → 즉시 해당 종목 스캔 트리거
+        self.scheduler.add_job(
+            self._surge_scan_loop,
+            trigger = IntervalTrigger(seconds=60),
+            id      = "surge_scan",
+            name    = "급증 감지 스캔",
+            misfire_grace_time = 10,
         )
 
         # ── 5분마다: 잔고 갱신
@@ -715,10 +931,12 @@ class CryptoSniperBot:
                     )
                     if result and result.success:
                         if act == "CLOSE_FULL":
-                            self._close_position_with_notify(
-                                pos.symbol,
-                                reason=action.get("reason", "청산")
-                            )
+                            # handle_action → on_trade_closed 콜백에서 DB 저장됨
+                            # 로컬 정리 + 쿨다운만
+                            self.rm.close_position(pos.symbol, reason=action.get("reason","청산"))
+                            import time as _t
+                            self._close_cooldown[pos.symbol] = _t.time() + self._cooldown_minutes * 60
+                            logger.info(f"[{pos.symbol}] 쿨다운 등록: {self._cooldown_minutes}분")
                 # MOVE_SL은 TRAILING MODE에서만 사용 (현재 비활성)
                 # elif act == "MOVE_SL":
                 #     self.executor.handle_action(action, entry_price=pos.entry_price)
@@ -843,19 +1061,28 @@ class CryptoSniperBot:
         lines = ["💰 *보유 포지션*\n━━━━━━━━━━━━━━━━━━━━"]
         for pos in positions:
             price = self._get_current_price(pos.symbol)
-            pnl_pct = 0.0
+            sym   = pos.symbol.split("/")[0]
+
+            notional = pos.entry_price * pos.position_size
+
+            pnl_pct  = 0.0
+            pnl_usdt = 0.0
             if price > 0 and pos.entry_price > 0:
-                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                price_chg = (price - pos.entry_price) / pos.entry_price
                 if pos.direction == "SHORT":
-                    pnl_pct = -pnl_pct
-                pnl_pct *= pos.leverage
+                    price_chg = -price_chg
+                pnl_pct  = price_chg * pos.leverage * 100
+                pnl_usdt = price_chg * notional * pos.leverage
+
             sign  = "+" if pnl_pct >= 0 else ""
             emoji = "🟢" if pnl_pct >= 0 else "🔴"
-            sym   = pos.symbol.split("/")[0]
+
             lines.append(
-                f"{emoji} *{sym}* {pos.direction}x{pos.leverage}\n"
-                f"  진입: `{pos.entry_price:.4f}`  현재: `{price:.4f}`\n"
-                f"  손익: `{sign}{pnl_pct:.2f}%`  SL: `{pos.sl_price:.4f}`"
+                f"{emoji} *{sym}* {pos.direction} x{pos.leverage}\n"
+                f"  진입가: `{pos.entry_price:.5f}`  현재가: `{price:.5f}`\n"
+                f"  투자금: `{notional:.2f} USDT`\n"
+                f"  손익률: `{sign}{pnl_pct:.2f}%`  손익금: `{sign}{pnl_usdt:.2f} USDT`\n"
+                f"  SL: `{pos.sl_price:.5f}`  TP1: `{pos.tp1_price:.5f}`"
             )
 
         buttons = [
@@ -909,7 +1136,13 @@ class CryptoSniperBot:
                 entry_price=pos.entry_price,
             )
             if result and result.success:
-                self._close_position_with_notify(symbol, reason="텔레그램 수동 청산")
+                # handle_action → on_trade_closed 콜백에서 이미 DB 저장됨
+                # _close_position_with_notify 호출하면 DB 2중 저장 → 로컬 정리만
+                self.rm.close_position(symbol, reason="텔레그램 수동 청산")
+                # 쿨다운 등록
+                import time as _t
+                self._close_cooldown[symbol] = _t.time() + self._cooldown_minutes * 60
+                logger.info(f"[{symbol}] 쿨다운 등록: {self._cooldown_minutes}분")
                 self.notifier.send_raw(f"✅ `{symbol}` 청산 완료")
             else:
                 self.notifier.send_raw(f"❌ `{symbol}` 청산 실패")
@@ -956,9 +1189,22 @@ class CryptoSniperBot:
     def _close_position_with_notify(self, symbol: str, reason: str) -> None:
         """
         강제 청산 시 로컬 포지션 제거 + DB 기록 + 텔레그램 알림.
-        API 오류로 인한 강제 청산(거래소 포지션 종료 감지 등)에서 호출.
+        거래소에서 SL/TP 체결로 포지션이 사라졌을 때도 여기서 처리.
+
+        미체결 주문 취소 이유:
+          SL이 체결되면 TP1/TP2 주문이 거래소에 남음.
+          다음 진입 시 이 잔여 주문이 새 포지션을 의도치 않게 청산할 수 있어
+          → 포지션 종료 감지 즉시 잔여 주문 전부 취소
         """
         pos = self.rm.get_position(symbol)
+
+        # 잔여 미체결 주문 취소 (SL 체결 후 남은 TP 등)
+        try:
+            self.executor._cancel_active_orders(symbol)
+            logger.info(f"[{symbol}] 잔여 미체결 주문 취소 완료")
+        except Exception as e:
+            logger.warning(f"[{symbol}] 잔여 주문 취소 중 오류: {e}")
+
         self.rm.close_position(symbol, reason=reason)
         logger.info(f"[{symbol}] {reason} — 로컬 상태 정리")
 

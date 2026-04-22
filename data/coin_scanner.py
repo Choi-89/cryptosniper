@@ -54,7 +54,7 @@ WATCHLIST_SIZE     = 30
 WATCHLIST_A_SIZE        = 15     # A군: 유동성 안정 종목 수
 WATCHLIST_B_SIZE        = 15     # B군: 지금 움직이는 종목 수
 WATCHLIST_B_MIN_QUOTE   = 5_000_000   # B군 최소 거래대금 ($500만, 저유동성 차단)
-WATCHLIST_B_REFRESH_MIN = 60     # B군 갱신 주기 (분)
+WATCHLIST_B_REFRESH_MIN = 30     # B군 갱신 주기 (분) — 급등 종목 조기 포착
 WATCHLIST_B_VOLUME_LOOKBACK = 24 # B군 판단 기준: 최근 N시간 대비 현재 1시간 배수
 
 # ── watchlist 혼합 점수 가중치 ────────────────────────────────────────────────
@@ -65,7 +65,7 @@ WATCHLIST_VOLUME_WEIGHT    = 0.5   # 24시간 거래대금 가중치
 WATCHLIST_MOMENTUM_WEIGHT  = 0.5   # 거래량 증가율 가중치
 WATCHLIST_MIN_MOMENTUM     = 1.0   # 최소 거래량 증가율 (1.0 = 평균 이상)
 WATCHLIST_MAX_MOMENTUM     = 10.0  # 이상치 방지용 증가율 상한
-SURGE_VOLUME_MULTIPLIER = 5.0    # 직전 평균 대비 몇 배 이상이면 급증으로 판단
+SURGE_VOLUME_MULTIPLIER = 3.0    # 직전 평균 대비 몇 배 이상이면 급증으로 판단 (5.0→3.0 완화)
 SURGE_MIN_QUOTE_VOLUME  = 500_000  # 급증 감지 최소 거래대금 ($50만, 너무 소형 제외)
 SURGE_WATCHLIST_MINUTES = 60     # 급증 감지 종목을 watchlist에 유지할 시간 (분)
 SURGE_MAX_SYMBOLS       = 5      # 급증 감지로 추가할 최대 심볼 수
@@ -80,19 +80,19 @@ class CoinScanner:
         testnet: bool = False,
         demo: bool = False,
     ):
-        exchange_cfg = {
+        self.exchange = ccxt.binanceusdm({
             "apiKey":  api_key,
             "secret":  api_secret,
             "options": {
                 "defaultType":     "future",
-                "fetchCurrencies": False,     # Spot SAPI 호출 차단
+                "fetchCurrencies": False,
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-        }
-        if demo or testnet:
-            exchange_cfg["urls"] = DEMO_TRADING_URLS
-        self.exchange = ccxt.binanceusdm(exchange_cfg)
+            "urls": DEMO_TRADING_URLS,
+        })
+        if demo:
+            self.exchange.urls.update(DEMO_TRADING_URLS)
 
         self._markets: dict = {}
         self._watchlist: list[str] = []
@@ -243,17 +243,15 @@ class CoinScanner:
 
     def detect_volume_surge(self) -> list[str]:
         """
-        전체 티커를 1회 조회하여 거래량이 급증한 종목을 감지하고
-        _surge_symbols에 추가한다.
-
-        main.py 스케줄러에서 1분마다 호출 권장.
+        전체 티커를 1회 조회하여 거래량이 급증한 종목을 감지.
 
         동작 방식:
-          - 전체 티커 1회 REST 호출 (개별 호출 아님 → 빠름)
-          - baseVolume(현재 캔들 거래량) 히스토리와 비교
-            → quoteVolume(24시간 누적)은 천천히 변해서 급등 감지 불가
-          - 현재 baseVolume이 히스토리 평균의 SURGE_VOLUME_MULTIPLIER배 이상이면 급증
-          - 최소 quoteVolume 필터는 유지 (극소형 종목 제외용)
+          - B군 선정과 동일한 방식: 현재 1시간 거래량 / 24시간 평균 1시간 거래량
+            recent_ratio = (baseVolume × last_price) / (quoteVolume / 24)
+            → quoteVolume 증가 속도 방식은 자정 이후 시간 누적 효과로 오탐 폭발
+            → 이 방식은 "지금 이 1시간에 얼마나 많이 거래됐나"를 직접 측정
+          - recent_ratio >= SURGE_VOLUME_MULTIPLIER(3.0x) 이상이면 급증
+          - 이미 surge_symbols에 있거나 watchlist 종목은 스킵 (중복 감지 방지)
 
         Returns
         -------
@@ -273,46 +271,38 @@ class CoinScanner:
             base = symbol.split("/")[0]
             if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
                 continue
+            if not base.isascii():
+                continue
 
-            # 최소 24시간 거래대금 필터 (극소형 제외)
-            quote_vol = float(ticker.get("quoteVolume") or 0)
+            # 최소 24시간 거래대금 필터
+            quote_vol  = float(ticker.get("quoteVolume") or 0)
             if quote_vol < SURGE_MIN_QUOTE_VOLUME:
                 continue
 
-            # ★ 핵심 변경: baseVolume(현재 캔들 거래량)으로 급증 판단
-            # quoteVolume은 24시간 누적이라 1분 급등을 감지 불가
-            base_vol = float(ticker.get("baseVolume") or 0)
-            if base_vol <= 0:
+            # 현재 1시간 거래량(USDT) 추정
+            # baseVolume × 현재가 ≈ 지금 이 캔들의 거래대금
+            base_vol   = float(ticker.get("baseVolume") or 0)
+            last_price = float(ticker.get("last") or ticker.get("close") or 0)
+            if base_vol <= 0 or last_price <= 0:
                 continue
 
-            # 히스토리 업데이트
-            if symbol not in self._ticker_history:
-                self._ticker_history[symbol] = []
-            history = self._ticker_history[symbol]
-            history.append(base_vol)
+            current_1h_usdt = base_vol * last_price
 
-            # 최대 크기 유지
-            if len(history) > self._ticker_history_size:
-                self._ticker_history[symbol] = history[-self._ticker_history_size:]
-
-            # 히스토리 5회 미만이면 판단 생략
-            if len(history) < 5:
+            # 24시간 평균 1시간 거래대금
+            avg_1h_usdt = quote_vol / 24.0
+            if avg_1h_usdt <= 0:
                 continue
 
-            # 직전 값들의 평균 (현재값 제외)
-            prev_values = history[:-1]
-            prev_avg = sum(prev_values) / len(prev_values)
-
-            if prev_avg <= 0:
-                continue
-
-            surge_ratio = base_vol / prev_avg
+            # 현재 1시간이 평균 대비 몇 배인지
+            recent_ratio = current_1h_usdt / avg_1h_usdt
 
             # 급증 감지
-            if surge_ratio >= SURGE_VOLUME_MULTIPLIER:
-                if symbol in self._watchlist:
-                    continue
+            if recent_ratio >= SURGE_VOLUME_MULTIPLIER:
+                # 이미 감지된 종목 스킵
                 if symbol in self._surge_symbols:
+                    continue
+                # 이미 watchlist에 있는 종목 스킵 (구독 중)
+                if symbol in self._watchlist:
                     continue
                 if len(self._surge_symbols) >= SURGE_MAX_SYMBOLS:
                     continue
@@ -321,17 +311,16 @@ class CoinScanner:
                 newly_detected.append(symbol)
                 logger.info(
                     f"[거래량 급증 감지] {symbol}  "
-                    f"현재거래량={base_vol:.0f}  "
-                    f"평균거래량={prev_avg:.0f}  "
-                    f"배수={surge_ratio:.1f}x  "
-                    f"24H거래대금={quote_vol/1e6:.1f}M  "
-                    f"→ watchlist 임시 추가 ({SURGE_WATCHLIST_MINUTES}분간)"
+                    f"현재1H={current_1h_usdt/1e6:.1f}M  "
+                    f"평균1H={avg_1h_usdt/1e6:.1f}M  "
+                    f"배수={recent_ratio:.1f}x  "
+                    f"24H거래대금={quote_vol/1e6:.0f}M"
                 )
 
         if newly_detected:
             logger.info(
-                f"거래량 급증 감지 완료: {len(newly_detected)}개 추가 "
-                f"({newly_detected})"
+                f"거래량 급증 감지 완료: {len(newly_detected)}개  "
+                f"({[s.split('/')[0] for s in newly_detected]})"
             )
 
         return newly_detected

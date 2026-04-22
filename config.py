@@ -185,9 +185,9 @@ class RiskConfig:
     min_position_usdt:   float = 5.0      # 최소 포지션 크기 (USDT)
 
     # SL / TP
-    atr_sl_multiplier:    float = 1.5      # SL 거리 = ATR × 1.5
-    tp1_ratio:            float = 2.0      # TP1 = SL거리 × 2  (R:R = 1:2)
-    tp2_ratio:            float = 4.0      # TP2 = SL거리 × 4  (R:R = 1:4)
+    atr_sl_multiplier = 1.0  # (1.5→1.0)
+    tp1_ratio         = 1.5  # (2.0→1.5)
+    tp2_ratio         = 3.0  # (4.0→3.0)
     tp1_close_pct:        float = 0.5      # TP1 도달 시 50% 청산
     trailing_trigger_pct: float = 0.01     # 고점 대비 -1% 이탈 시 청산
 

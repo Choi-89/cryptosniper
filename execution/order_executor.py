@@ -704,16 +704,53 @@ class OrderExecutor:
     # ── 내부: 활성 주문 전체 취소 ─────────────────────────────────────────────
 
     def _cancel_active_orders(self, symbol: str) -> None:
-        """캐시에 저장된 SL/TP 주문 전부 취소."""
+        """
+        해당 심볼의 미체결 주문 전부 취소.
+
+        두 가지 방식으로 취소:
+          1. 캐시(_active_orders)에 저장된 주문 ID로 취소
+             → 봇이 등록한 SL/TP 주문 ID를 기억하고 있을 때
+          2. 거래소에서 해당 심볼의 미체결 주문 전체 조회 후 취소
+             → 캐시가 없거나 캐시와 실제가 불일치할 때 (안전망)
+
+        호출 시점:
+          - 봇이 직접 청산할 때 (CLOSE_FULL)
+          - 거래소에서 SL/TP 체결로 포지션이 사라진 걸 감지했을 때
+            → 남은 반대쪽 TP/SL 주문이 다음 포지션에 영향 주는 걸 방지
+        """
+        # 1. 캐시 기반 취소
         orders = self._active_orders.get(symbol, {})
+        cancelled_ids = set()
         for order_type, order_id in orders.items():
             if not order_id:
                 continue
             try:
                 self.exchange.cancel_order(order_id, symbol)
-                logger.info(f"[{symbol}] {order_type} 주문 취소: {order_id}")
+                cancelled_ids.add(order_id)
+                logger.info(f"[{symbol}] {order_type} 주문 취소(캐시): {order_id}")
             except Exception as e:
                 logger.warning(f"[{symbol}] {order_type} 취소 실패: {e}")
+
+        # 2. 거래소 전체 미체결 주문 조회 후 잔여 주문 취소 (안전망)
+        try:
+            open_orders = self.exchange.fetch_open_orders(symbol)
+            for order in open_orders:
+                order_id = str(order.get("id", ""))
+                if order_id and order_id not in cancelled_ids:
+                    try:
+                        self.exchange.cancel_order(order_id, symbol)
+                        logger.info(
+                            f"[{symbol}] 잔여 주문 취소(안전망): "
+                            f"id={order_id} type={order.get('type')} "
+                            f"side={order.get('side')}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[{symbol}] 잔여 주문 취소 실패: {e}")
+        except Exception as e:
+            logger.warning(f"[{symbol}] 미체결 주문 조회 실패: {e}")
+
+        # 캐시 정리
+        self._active_orders.pop(symbol, None)
 
 
 # ── 순수 함수 ──────────────────────────────────────────────────────────────────

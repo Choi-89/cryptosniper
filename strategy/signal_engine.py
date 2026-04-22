@@ -241,7 +241,7 @@ def _check_long(
 
     # M2. RSI 범위
     # [테스트 완화] 30~75 (원래: 40~65)
-    if not (30 <= momentum.rsi <= 75):
+    if not (40 <= momentum.rsi <= 65):
         return False, f"RSI={momentum.rsi:.1f} 롱 진입 구간(40~65) 벗어남"
 
     # V1. 거래량 급등 — 필수 조건 제거, signal_scorer 감점으로만 처리
@@ -426,7 +426,7 @@ def _check_pullback(
     # 1시간봉: 강한 추세 확인
     if not trend_1h.ema_aligned_up:
         return False
-    if trend_1h.adx < 35:
+    if trend_1h.adx < 30:   # [완화] 35→30: 강한 추세 기준 낮춤
         return False
 
     # 5분봉 지표 계산
@@ -439,33 +439,35 @@ def _check_pullback(
         return False
 
     # 5분봉 조건 1: StochRSI 과매도 탈출
-    # 직전 K가 20 이하였고 현재 K가 20을 넘으면서 K > D
-    stoch_was_oversold = mom_5m.stoch_k_prev <= 20
-    stoch_recovering   = mom_5m.stoch_k > 20 and mom_5m.stoch_k_above_d
+    # [완화] 직전K ≤ 20 → ≤ 30 (과매도 구간을 더 넓게 인정)
+    # [완화] 현재K > 20 + K > D → 현재K > D면 충분 (탈출 방향만 확인)
+    stoch_was_oversold = mom_5m.stoch_k_prev <= 30
+    stoch_recovering   = mom_5m.stoch_k_above_d
     if not (stoch_was_oversold and stoch_recovering):
         return False
 
     # 5분봉 조건 2: MACD 반전 감지
-    # hist 음수 → 양수 전환 중 (bull_cross) 또는 음수지만 증가 중
-    macd_reversing = mom_5m.macd_bull_cross or (
-        mom_5m.macd_hist < 0 and mom_5m.macd_hist_growing
-    )
-    if not macd_reversing:
-        return False
+    # [완화] bull_cross만 체크 (음→양 증가 조건 제거 — 너무 정밀)
+    if not mom_5m.macd_bull_cross:
+        # bull_cross가 없어도 hist가 최근 3캔들 연속 증가 중이면 허용
+        if not mom_5m.macd_hist_growing:
+            return False
 
-    # 5분봉 조건 3: 현재가가 EMA25 근처 (±5% 이내)
+    # 5분봉 조건 3: 현재가가 EMA50 근처
+    # [완화] ±5% → ±8% (지지선 근처 범위 확대)
     ema25 = trend_5m.ema_mid
+    dist  = 0.0
     if ema25 > 0:
         dist = abs(trend_5m.close - ema25) / ema25
-        if dist > 0.05:
+        if dist > 0.08:
             return False
 
     logger.info(
         f"[{symbol}] 눌림목 조건 충족  "
         f"ADX={trend_1h.adx:.1f}  "
         f"StochK={mom_5m.stoch_k:.1f}(prev={mom_5m.stoch_k_prev:.1f})  "
-        f"MACD_bull={mom_5m.macd_bull_cross}  "
-        f"EMA25거리={dist*100:.1f}%"
+        f"MACD_bull={mom_5m.macd_bull_cross}  hist_growing={mom_5m.macd_hist_growing}  "
+        f"EMA50거리={dist*100:.1f}%"
     )
     return True
 
