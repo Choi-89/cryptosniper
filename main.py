@@ -55,6 +55,10 @@ from leverage_manager    import LeverageManager
 from circuit_breaker     import CircuitBreaker
 from order_executor      import OrderExecutor, OrderResult
 from db_logger           import DbLogger, TradeRecord, SignalRecord
+try:
+    import pandas_ta as pta  # Squeeze/조기청산 RSI·MACD 계산용
+except ImportError:
+    pta = None
 from telegram_notifier   import TelegramNotifier, NotifyLevel
 
 
@@ -184,6 +188,25 @@ class CryptoSniperBot:
         # 같은 종목 재진입 시 COOLDOWN_MINUTES 경과 여부 체크
         self._close_cooldown: dict[str, float] = {}
         self._cooldown_minutes = 60   # 기본 60분 쿨다운
+        # 최근 스캔 후보 심볼 집합 — 진입 허가 게이트로만 사용 (피드 재시작 안 함)
+        self._scan_candidates: set[str] = set()
+        # Squeeze Breakout 레이어 — 종목별 거래량 침묵 상태 추적
+        # {symbol: {"silence_avg": float, "silence_bars": int, "detected_at": str}}
+        self._squeeze_state: dict[str, dict] = {}
+
+    def _desired_feed_symbols(self, watchlist: list[str] | None = None) -> list[str]:
+        """
+        현재 유지해야 할 목표 feed 심볼 집합 계산.
+
+        구성:
+        - 최신 watchlist
+        - 열린 포지션 심볼
+        - 최근 스캔 후보 심볼
+        """
+        base = list(watchlist) if watchlist is not None else self.scanner.get_watchlist()
+        position_symbols = {pos.symbol for pos in self.rm.get_all_positions()}
+        desired = list(dict.fromkeys(base + list(position_symbols) + list(self._scan_candidates)))
+        return desired
 
     # ── 라이프사이클 ──────────────────────────────────────────────────────────
 
@@ -228,6 +251,8 @@ class CryptoSniperBot:
             logger.warning("초기 스캔에서 후보 코인 없음 — 관심 심볼 전체로 시작")
         else:
             logger.info(f"초기 후보 {len(candidates)}개 — watchlist 전체({len(watchlist_symbols)}개) 구독")
+            # 초기 후보를 진입 허가 게이트에 등록
+            self._scan_candidates = {c["symbol"] for c in candidates}
         self._start_feeds(watchlist_symbols)
 
         # 5. 스케줄러 등록
@@ -330,6 +355,8 @@ class CryptoSniperBot:
         if timeframe != self.cfg.strategy.entry_timeframe:
             return
 
+        logger.info(f"[{symbol}] 15m 캔들 닫힘 감지 → 신호 판단 시작")
+
         # 동일 심볼 중복 처리 방지
         with self._processing_lock:
             if self._processing.get(symbol):
@@ -361,6 +388,18 @@ class CryptoSniperBot:
         Step 10. order_executor 실행
         """
         cfg = self.cfg
+
+        # ── Step 0. 스캔 후보 게이트 ─────────────────────────────────────────
+        # 포지션 없는 심볼은 최근 스캔에서 후보로 선정된 경우에만 진입 판단 진행
+        # → 구독은 watchlist 전체를 유지하고 진입은 후보만 허용
+        # _scan_candidates가 비어있으면(초기 스캔 전) 전종목 허용
+        if (
+            self._scan_candidates                     # 후보 목록이 확정됐고
+            and symbol not in self._scan_candidates   # 이 심볼이 후보 밖이고
+            and not self.rm.get_position(symbol)      # 포지션도 없으면
+        ):
+            logger.info(f"[{symbol}] 스캔 후보 아님 — 진입 스킵")  # debug→info로 변경
+            return
 
         # ── Step 1. Circuit Breaker ────────────────────────────────────────
         cb_status = self.cb.check()
@@ -503,7 +542,7 @@ class CryptoSniperBot:
         if report.success:
             from dataclasses import replace
 
-            from order_executor import _recalc_levels
+            from execution.order_executor import _recalc_levels
 
             actual_entry = report.entry.avg_price or plan.entry_price
             actual_sl, actual_tp1, actual_tp2 = _recalc_levels(plan, actual_entry)
@@ -586,16 +625,35 @@ class CryptoSniperBot:
             logger.error(f"급증 스캔 루프 오류: {e}", exc_info=True)
 
     def _refresh_watchlist_b(self) -> None:
-        """B군 watchlist 30분마다 갱신 — 지금 움직이는 종목 교체."""
+        """B군 watchlist 30분마다 갱신 — 신규 심볼 있을 때만 feed 재시작.
+
+        기존 feed 심볼 vs 새 watchlist를 비교해 신규 심볼이 생긴 경우에만
+        _start_feeds 재시작. 없으면 재시작 없이 candidates 갱신만.
+        → 5분마다 재시작하던 것과 달리 최대 30분에 1회, 실제 신규 때만 재시작.
+        """
         try:
             if not hasattr(self.scanner, "refresh_watchlist_b"):
                 return
-            watchlist = self.scanner.refresh_watchlist_b()
-            logger.info(f"B군 갱신 완료: watchlist={len(watchlist)}개")
-            # 피드 재구독 (새 종목 추가됐을 수 있음)
-            surge_symbols = set(self.scanner.get_surge_symbols().keys())
-            all_symbols   = list(set(watchlist) | surge_symbols)
-            self._start_feeds(all_symbols)
+            new_watchlist = self.scanner.refresh_watchlist_b()
+            desired_feed = set(self._desired_feed_symbols(new_watchlist))
+
+            with self._symbols_lock:
+                current_feed = set(self._subscribed_symbols)
+
+            added = desired_feed - current_feed
+            removed = current_feed - desired_feed
+            if added or removed:
+                logger.info(
+                    f"B군 갱신 → feed 재구독 ({len(desired_feed)}개)  "
+                    f"추가={ [s.split('/')[0] for s in sorted(added)] if added else [] }  "
+                    f"제거={ [s.split('/')[0] for s in sorted(removed)] if removed else [] }"
+                )
+                self._start_feeds(sorted(desired_feed))
+            else:
+                logger.info(
+                    f"B군 갱신 완료: watchlist={len(new_watchlist)}개 "
+                    f"(변경 없음 — 피드 유지)"
+                )
         except Exception as e:
             logger.error(f"B군 갱신 오류: {e}", exc_info=True)
 
@@ -718,7 +776,7 @@ class CryptoSniperBot:
                 tp2_price = entry_price * (1.12 if direction == "LONG" else 0.88)
 
             # Position 객체 생성 후 RiskManager에 등록
-            from risk_manager import Position, PositionState
+            from risk.risk_manager import Position, PositionState
             import time as _t
             pos = Position(
                 symbol        = symbol,
@@ -759,16 +817,33 @@ class CryptoSniperBot:
         """
         관심 심볼 30개 갱신 — 자정마다 스케줄러 호출.
         REST API 대량 호출(수백 회)은 오직 이 메서드에서만 발생.
+        신규 심볼이 있을 때만 feed 재시작 (B군 갱신과 동일한 전략).
         """
         try:
-            watchlist = self.scanner.refresh_watchlist()
-            logger.info(
-                f"관심 심볼 갱신 완료: {len(watchlist)}개  "
-                f"(예: {watchlist[:3]}...)"
-            )
+            new_watchlist = self.scanner.refresh_watchlist()
+            desired_feed = set(self._desired_feed_symbols(new_watchlist))
+
+            with self._symbols_lock:
+                current_feed = set(self._subscribed_symbols)
+
+            added = desired_feed - current_feed
+            removed = current_feed - desired_feed
+            if added or removed:
+                logger.info(
+                    f"관심 심볼 갱신 → feed 재구독 ({len(desired_feed)}개)  "
+                    f"추가={ [s.split('/')[0] for s in sorted(added)] if added else [] }  "
+                    f"제거={ [s.split('/')[0] for s in sorted(removed)] if removed else [] }"
+                )
+                self._start_feeds(sorted(desired_feed))
+            else:
+                logger.info(
+                    f"관심 심볼 갱신 완료: {len(new_watchlist)}개 "
+                    f"(변경 없음 — 피드 유지)"
+                )
+
             if self.cfg.notification.telegram_token:
                 self.notifier.send_raw(
-                    f"🔄 관심 심볼 갱신 완료 ({len(watchlist)}개)",
+                    f"🔄 관심 심볼 갱신 완료 ({len(new_watchlist)}개)",
                     NotifyLevel.LOW,
                 )
         except Exception as e:
@@ -784,38 +859,457 @@ class CryptoSniperBot:
             logger.error(f"코인 스캔 오류: {e}", exc_info=True)
             return []
 
+    def _squeeze_scan(self) -> None:
+        """
+        Squeeze Breakout 조기 감지 레이어 — 5분마다 실행 (Shadow Mode).
+
+        현재 방식(15m 캔들 닫힘 후 감지)보다 선행해서 상승 초입을 포착.
+        실주문은 없고 DB에만 기록 → 기존 엔진 결과와 비교 분석용.
+
+        필수 필터 (하나라도 실패 시 즉시 제외):
+          - 양봉 여부
+          - EMA 정배열: MA7 >= MA25
+          - MACD hist > 0 (방향성 확인)
+          - RSI < 70 (과열 구간 완전 차단)
+
+        점수 계산 (기준선 50점):
+          +40  거래량 스파이크 (필수)
+          +15  MA 수렴 (ATR×0.8 이내)
+          +20  StochRSI 과매도 반등 (K < 20 → 상승)
+          +20  박스 상단 돌파
+          +15  호가창 ask 감소
+          +0~10 침묵 지속 보너스
+          +15  황금 패턴 (RSI<63 + StochRSI반등 + MA수렴 동시)
+          -10  RSI 60~63
+          -40  RSI 63~70
+
+        돌파✗ 종목: 30분간 박스 돌파 모니터링 (pending)
+        돌파 확인 시: [SQUEEZE:진입트리거] 로그 + actual_result 업데이트
+        """
+        if self.fetcher is None:
+            return
+
+        watchlist = self.scanner.get_watchlist() if hasattr(self.scanner, "get_watchlist") else []
+        if not watchlist:
+            return
+
+        tf_5m = self.cfg.strategy.confirm_timeframe  # "5m"
+        detected = []
+        import time as _time
+        now_ts = _time.time()
+
+        # ── Pending 모니터링: 스파이크 감지 후 박스 돌파 대기 종목 체크 ─────
+        for p_sym, p_state in list(self._squeeze_state.items()):
+            pending = p_state.get("pending")
+            if not pending:
+                continue
+            if now_ts > pending["expires_at"]:
+                logger.debug(f"[SQUEEZE:만료] {p_sym.split('/')[0]} — 30분 내 돌파 없음")
+                p_state.pop("pending", None)
+                continue
+            try:
+                p_df = self.fetcher.get_df(p_sym, tf_5m)
+                if p_df is None or len(p_df) < 5:
+                    continue
+                p_close = float(p_df["close"].iloc[-1])
+                p_box_high = pending["box_high_at_detect"]
+                p_elapsed_min = round((now_ts - pending["detect_ts"]) / 60)
+                if p_close > p_box_high * 1.002:
+                    pct_from_detect = round(
+                        (p_close - pending["price_at_detect"])
+                        / pending["price_at_detect"] * 100, 2
+                    )
+                    logger.info(
+                        f"[SQUEEZE:진입트리거] {p_sym.split('/')[0]}  "
+                        f"경과={p_elapsed_min}분  "
+                        f"감지가={pending['price_at_detect']:.6f}  "
+                        f"현재가={p_close:.6f}  "
+                        f"+{pct_from_detect:.2f}%  "
+                        f"score={pending['score_at_detect']}"
+                    )
+                    self._update_squeeze_trigger(p_sym, pending, p_close, pct_from_detect, p_elapsed_min)
+                    p_state.pop("pending", None)
+            except Exception as e:
+                logger.debug(f"[SQUEEZE] {p_sym} pending 체크 오류: {e}")
+
+        for symbol in watchlist:
+            try:
+                df = self.fetcher.get_df(symbol, tf_5m)
+                if df is None or len(df) < 30:
+                    continue
+
+                closes  = df["close"].values
+                volumes = df["volume"].values
+                highs   = df["high"].values
+                lows    = df["low"].values
+
+                # ── 1순위: 거래량 침묵 → 첫 스파이크 ────────────────────────
+                silence_vols = volumes[-26:-1]
+                current_vol  = volumes[-1]
+
+                nonzero = silence_vols[silence_vols > 0]
+                if len(nonzero) < 10:
+                    continue
+                silence_avg = float(nonzero.mean())
+                if silence_avg <= 0:
+                    continue
+
+                all_vols_avg = float(volumes[-50:].mean()) if len(volumes) >= 50 else silence_avg
+                spike_mult   = 2.0 if silence_avg < all_vols_avg * 0.6 else 2.5
+                is_spike     = current_vol >= silence_avg * spike_mult
+                silence_bars = int((silence_vols < silence_avg * 0.7).sum())
+
+                if not is_spike or silence_bars < 8:
+                    self._squeeze_state[symbol] = {
+                        "silence_avg":  silence_avg,
+                        "silence_bars": silence_bars,
+                        "spike_mult":   spike_mult,
+                    }
+                    continue
+
+                # ── 필수 필터 1: 양봉 ────────────────────────────────────────
+                open_prices = df["open"].values
+                if not (closes[-1] > open_prices[-1]):
+                    continue
+
+                # ── 필수 필터 2: EMA 정배열 (MA7 >= MA25) ────────────────────
+                close_s = pd.Series(closes)
+                ma7  = close_s.rolling(7).mean().iloc[-1]
+                ma25 = close_s.rolling(25).mean().iloc[-1]
+                if ma7 < ma25:
+                    logger.debug(
+                        f"[SQUEEZE] {symbol.split('/')[0]} MA 역배열 차단 "
+                        f"(MA7={ma7:.4f} < MA25={ma25:.4f})"
+                    )
+                    continue
+
+                # ── 필수 필터 3: MACD hist 증가 추세 ────────────────────────────
+                # hist > 0 대신 '현재 hist > 직전 hist' (방향성 기준)
+                # → 음수→양수 전환 첫 캔들도 포착 가능 (PRL/DAM 케이스 대응)
+                # 단, 강한 음수(-ATR의 1% 이하)이면 차단
+                macd_ok = False
+                try:
+                    if pta:
+                        macd_df = pta.macd(close_s, fast=12, slow=26, signal=9)
+                        if macd_df is not None and len(macd_df) >= 2:
+                            hist_col = [c for c in macd_df.columns if "h" in c.lower()]
+                            if hist_col:
+                                macd_hist_now  = float(macd_df[hist_col[0]].iloc[-1])
+                                macd_hist_prev = float(macd_df[hist_col[0]].iloc[-2])
+                                hist_rising    = macd_hist_now > macd_hist_prev
+                                # 강한 음수 차단: hist < -(현재가×0.005) 이면 하락 모멘텀 강함
+                                price_threshold = float(closes[-1]) * 0.005
+                                strong_negative = macd_hist_now < -price_threshold
+                                macd_ok = hist_rising and not strong_negative
+                except Exception:
+                    macd_ok = True  # 계산 실패 시 통과
+                if not macd_ok:
+                    logger.debug(
+                        f"[SQUEEZE] {symbol.split('/')[0]} MACD 방향성 없음 — 차단"
+                    )
+                    continue
+
+                # ── ATR 계산 ────────────────────────────────────────────────
+                tr = [max(highs[i] - lows[i],
+                          abs(highs[i] - closes[i-1]),
+                          abs(lows[i]  - closes[i-1]))
+                      for i in range(-15, -1)]
+                atr = sum(tr) / len(tr) if tr else 0.001
+
+                # ── 2순위: MA 수렴도 (ATR×0.8 이내) ─────────────────────────
+                ma_gap = abs(ma7 - ma25)
+                ma_convergence = ma_gap / atr if atr > 0 else 99
+                is_converged   = ma_convergence < 0.8
+
+                # ── 2.5순위: StochRSI 과매도 반등 ────────────────────────────
+                stoch_recovering = False
+                try:
+                    if pta:
+                        stoch_df = pta.stochrsi(close_s, length=14, rsi_length=14, k=3, d=3)
+                        if stoch_df is not None and not stoch_df.empty:
+                            k_col = [c for c in stoch_df.columns if "k" in c.lower()]
+                            if k_col:
+                                sk_now  = float(stoch_df[k_col[0]].iloc[-1])
+                                sk_prev = float(stoch_df[k_col[0]].iloc[-2])
+                                stoch_recovering = sk_prev < 20 and sk_now > sk_prev
+                except Exception:
+                    stoch_recovering = False
+
+                # ── 3순위: 박스 상단 이탈 ────────────────────────────────────
+                box_high      = float(max(highs[-21:-1]))
+                current_close = float(closes[-1])
+                is_breakout   = current_close > box_high * 1.002
+
+                # ── 4순위: 호가창 ask 감소 ───────────────────────────────────
+                ask_shrinking = False
+                if hasattr(self, "ob") and self.ob is not None:
+                    try:
+                        snap = self.ob.get_snapshot(symbol)
+                        if snap is not None:
+                            asks_raw = getattr(snap, "asks", None)
+                            if asks_raw is not None and len(asks_raw) > 0:
+                                try:
+                                    ask_total = sum(
+                                        (item[1] if isinstance(item, (list, tuple))
+                                         else item.size)
+                                        for item in asks_raw[:10]
+                                    )
+                                except Exception:
+                                    ask_total = 0.0
+                                if ask_total > 0:
+                                    prev_state = self._squeeze_state.get(symbol, {})
+                                    prev_ask   = prev_state.get("prev_ask_total", ask_total)
+                                    ask_shrinking = ask_total < prev_ask * 0.90
+                                    if symbol not in self._squeeze_state:
+                                        self._squeeze_state[symbol] = {}
+                                    self._squeeze_state[symbol]["prev_ask_total"] = ask_total
+                    except Exception as e:
+                        logger.debug(f"[SQUEEZE] {symbol} ask 조회 실패: {e}")
+
+                # ── 필수 필터 4: RSI 계산 + RSI≥70 완전 차단 ────────────────
+                rsi_s   = pta.rsi(close_s, length=14) if pta else None
+                rsi_now = float(rsi_s.iloc[-1]) if rsi_s is not None else 50.0
+                if rsi_now >= 70:
+                    logger.debug(f"[SQUEEZE] {symbol.split('/')[0]} RSI={rsi_now:.1f}≥70 차단")
+                    continue
+
+                # ── 종합 점수 계산 ────────────────────────────────────────────
+                score = 0
+                score += 40                            # 스파이크 (필수)
+                score += 15 if is_converged   else 0   # MA 수렴
+                score += 20 if stoch_recovering else 0  # StochRSI 과매도 반등
+                score += 20 if is_breakout    else 0   # 박스 돌파
+                score += 15 if ask_shrinking  else 0   # ask 감소
+                score += min(silence_bars // 4, 10)    # 침묵 보너스
+
+                # RSI 패널티
+                if rsi_now >= 63:
+                    score -= 40   # RSI 63~70 강화 패널티
+                elif rsi_now >= 60:
+                    score -= 10   # RSI 60~63 경계 패널티
+
+                # 황금 패턴 보너스: RSI 양호 + StochRSI 반등 + MA 수렴 동시 충족
+                if rsi_now < 63 and stoch_recovering and is_converged:
+                    score += 15
+                    logger.debug(
+                        f"[SQUEEZE] {symbol.split('/')[0]} 황금 패턴 +15 "
+                        f"(RSI={rsi_now:.1f} + StochRSI 반등 + MA 수렴)"
+                    )
+
+                # 돌파 여부 태그
+                breakout_tag = "돌파" if is_breakout else "초입"
+
+                MIN_SCORE = 50
+                import datetime as _dt
+                now_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+                result = {
+                    "symbol":           symbol,
+                    "score":            score,
+                    "silence_bars":     silence_bars,
+                    "silence_avg":      round(silence_avg, 2),
+                    "current_vol":      round(float(current_vol), 2),
+                    "spike_ratio":      round(float(current_vol) / silence_avg, 2),
+                    "ma_convergence":   round(ma_convergence, 2),
+                    "is_converged":     is_converged,
+                    "is_breakout":      is_breakout,
+                    "ask_shrinking":    ask_shrinking,
+                    "rsi":              round(rsi_now, 1),
+                    "stoch_recovering": stoch_recovering,
+                    "breakout_tag":     breakout_tag,
+                    "macd_ok":          macd_ok,
+                    "box_high":         round(box_high, 6),
+                    "price_at_detect":  round(float(closes[-1]), 6),
+                    "detected_at":      now_str,
+                    "passed":           score >= MIN_SCORE,
+                }
+                detected.append(result)
+
+                if score >= MIN_SCORE:
+                    # 30분 쿨다운 체크
+                    last_rec = self._squeeze_state.get(symbol, {}).get("last_recorded", 0)
+                    if _time.time() - last_rec < 1800:
+                        logger.debug(f"[SQUEEZE] {symbol.split('/')[0]} 쿨다운 — 스킵")
+                    else:
+                        logger.info(
+                            f"[SQUEEZE:{breakout_tag}] {symbol.split('/')[0]}  "
+                            f"score={score}  spike={result['spike_ratio']:.1f}×  "
+                            f"silence={silence_bars}봉  RSI={rsi_now:.1f}  "
+                            f"stoch_rec={stoch_recovering}  "
+                            f"converged={is_converged}  breakout={is_breakout}  "
+                            f"ask_shrink={ask_shrinking}"
+                        )
+                        self._save_squeeze_signal(result)
+                        if symbol not in self._squeeze_state:
+                            self._squeeze_state[symbol] = {}
+                        self._squeeze_state[symbol]["last_recorded"] = _time.time()
+
+                        # pending 등록: 돌파✗ 종목만 30분 모니터링
+                        if not is_breakout:
+                            self._squeeze_state[symbol]["pending"] = {
+                                "price_at_detect":    result["price_at_detect"],
+                                "box_high_at_detect": result["box_high"],
+                                "detected_at":        now_str,
+                                "detect_ts":          _time.time(),
+                                "score_at_detect":    score,
+                                "expires_at":         _time.time() + 14400,  # 4시간
+                            }
+                            logger.info(
+                                f"[SQUEEZE:대기] {symbol.split('/')[0]} — "
+                                f"박스 돌파 모니터링 시작 "
+                                f"(기준선={result['box_high']:.6f}  "
+                                f"감지가={result['price_at_detect']:.6f}  만료=4시간)"
+                            )
+                else:
+                    logger.debug(f"[SQUEEZE-WEAK] {symbol.split('/')[0]}  score={score}")
+
+                # 상태 갱신
+                if symbol not in self._squeeze_state:
+                    self._squeeze_state[symbol] = {}
+                self._squeeze_state[symbol].update({
+                    "silence_avg":  silence_avg,
+                    "silence_bars": silence_bars,
+                    "spike_mult":   spike_mult,
+                })
+
+            except Exception as e:
+                logger.debug(f"[SQUEEZE] {symbol} 계산 오류: {e}")
+
+        if detected:
+            passed = [r for r in detected if r["passed"]]
+            logger.info(
+                f"[SQUEEZE] 스캔 완료: {len(detected)}개 스파이크 감지, "
+                f"{len(passed)}개 기준 통과"
+            )
+
+
+    def _update_squeeze_trigger(
+        self,
+        symbol: str,
+        pending: dict,
+        trigger_price: float,
+        pct_from_detect: float,
+        elapsed_min: int,
+    ) -> None:
+        """박스 돌파 확인 시 squeeze_signals.actual_result 업데이트."""
+        import json as _json, sqlite3
+        actual = {
+            "trigger_price":      round(trigger_price, 6),
+            "price_at_detect":    pending["price_at_detect"],
+            "pct_from_detect":    pct_from_detect,
+            "elapsed_min":        elapsed_min,
+            "breakout_confirmed": True,
+        }
+        try:
+            conn = sqlite3.connect(self.cfg.system.db_path)
+            cur  = conn.cursor()
+            # actual_result 컬럼이 없으면 추가
+            try:
+                cur.execute("ALTER TABLE squeeze_signals ADD COLUMN actual_result TEXT DEFAULT ''")
+                conn.commit()
+            except Exception:
+                pass  # 이미 존재하면 무시
+            cur.execute("""
+                UPDATE squeeze_signals
+                SET    actual_result = ?
+                WHERE  symbol      = ?
+                  AND  detected_at = ?
+                  AND  (actual_result IS NULL OR actual_result = '')
+            """, (_json.dumps(actual, ensure_ascii=False), symbol, pending["detected_at"]))
+            conn.commit()
+            conn.close()
+            logger.info(
+                f"[SQUEEZE] {symbol.split('/')[0]} actual_result 업데이트 "
+                f"(+{pct_from_detect:.2f}%  {elapsed_min}분 후 돌파)"
+            )
+        except Exception as e:
+            logger.warning(f"[SQUEEZE] {symbol} actual_result 업데이트 실패: {e}")
+
+    def _save_squeeze_signal(self, result: dict) -> None:
+        """Squeeze Breakout 감지 결과를 DB에 Shadow 기록."""
+        try:
+            import sqlite3, json
+            db_path = self.cfg.system.db_path
+            conn = sqlite3.connect(db_path)
+            cur  = conn.cursor()
+            # 테이블 없으면 생성
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS squeeze_signals (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol       TEXT    NOT NULL,
+                    score        INTEGER NOT NULL,
+                    silence_bars INTEGER NOT NULL,
+                    spike_ratio  REAL    NOT NULL,
+                    ma_convergence REAL  NOT NULL,
+                    is_converged INTEGER NOT NULL,
+                    is_breakout  INTEGER NOT NULL,
+                    ask_shrinking INTEGER NOT NULL,
+                    rsi          REAL    NOT NULL,
+                    detected_at  TEXT    NOT NULL,
+                    actual_result TEXT   DEFAULT ''
+                )
+            """)
+            cur.execute("""
+                INSERT INTO squeeze_signals
+                  (symbol, score, silence_bars, spike_ratio,
+                   ma_convergence, is_converged, is_breakout,
+                   ask_shrinking, rsi, detected_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                result["symbol"],
+                result["score"],
+                result["silence_bars"],
+                result["spike_ratio"],
+                result["ma_convergence"],
+                int(result["is_converged"]),
+                int(result["is_breakout"]),
+                int(result["ask_shrinking"]),
+                result["rsi"],
+                result["detected_at"],
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug(f"[SQUEEZE] DB 기록 실패: {e}")
+
     def _scheduled_scan(self) -> None:
-        """스케줄러에서 5분마다 호출 — 후보 변경 시 피드 재구독."""
+        """스케줄러에서 5분마다 호출 — 후보 목록 갱신, 신규 feed 추가.
+
+        ① _scan_candidates 갱신 (진입 허가 게이트)
+        ② 후보 중 feed 밖 신규 심볼이 있으면 _start_feeds 재시작
+           → watchlist 갱신(30분)이 아닌 스캔 결과로도 신규 종목 즉시 반영
+           → 단, 재시작 조건: '실제 신규 심볼'이 있을 때만 (5분마다 무조건 X)
+        """
         logger.info("정기 스캔 시작...")
         candidates = self._run_scan()
-        if not candidates:
+
+        new_symbols = {c["symbol"] for c in candidates} if candidates else set()
+
+        # _scan_candidates 갱신 (진입 허가 게이트용)
+        self._scan_candidates = new_symbols
+
+        if not new_symbols:
+            logger.debug("진입 후보 없음 — 캔들 닫힘 시 전 종목 HOLD")
             return
 
-        new_symbols = [c["symbol"] for c in candidates]
-
-        with self._symbols_lock:
-            current = set(self._subscribed_symbols)
-
-        new_set = set(new_symbols)
-        if new_set == current:
-            logger.debug("스캔 결과 동일 — 피드 유지")
-            return
-
-        added   = new_set - current
-        removed = current - new_set
-        logger.info(
-            f"심볼 변경 감지  "
-            f"추가={list(added)}  제거={list(removed)}"
+        logger.debug(
+            f"진입 후보 갱신: {len(new_symbols)}개 "
+            f"{[s.split('/')[0] for s in sorted(new_symbols)]}"
         )
 
-        # 제거 심볼에 활성 포지션 있으면 제외하고 유지
-        safe_to_remove = set()
-        for sym in removed:
-            if not self.rm.get_position(sym):
-                safe_to_remove.add(sym)
+        # 후보 중 현재 feed에 없는 신규 심볼 확인
+        with self._symbols_lock:
+            current_feed = set(self._subscribed_symbols)
 
-        final_symbols = list((current - safe_to_remove) | new_set)
-        self._start_feeds(final_symbols)
+        truly_new = new_symbols - current_feed
+        if truly_new:
+            # 기존 feed 유지 + 신규 심볼 추가
+            merged = list(current_feed | new_symbols)
+            logger.info(
+                f"스캔 후보 중 feed 밖 신규 {len(truly_new)}개 → feed 추가 재구독: "
+                f"{[s.split('/')[0] for s in sorted(truly_new)]}"
+            )
+            self._start_feeds(merged)
 
     # ── 스케줄 등록 ──────────────────────────────────────────────────────────
 
@@ -838,6 +1332,14 @@ class CryptoSniperBot:
             trigger = IntervalTrigger(seconds=self.cfg.scanner.scan_interval),
             id      = "scan",
             name    = "코인 스캔",
+            misfire_grace_time = 30,
+        )
+        # Squeeze Breakout 조기 감지 — 기존 스캔과 동일 주기, Shadow Mode
+        self.scheduler.add_job(
+            self._squeeze_scan,
+            trigger = IntervalTrigger(seconds=self.cfg.scanner.scan_interval),
+            id      = "squeeze_scan",
+            name    = "Squeeze Breakout 조기 감지 (Shadow)",
             misfire_grace_time = 30,
         )
 
@@ -873,13 +1375,15 @@ class CryptoSniperBot:
         )
 
         # ── 1분마다: 거래량 급증 감지 → 즉시 해당 종목 스캔 트리거
-        self.scheduler.add_job(
-            self._surge_scan_loop,
-            trigger = IntervalTrigger(seconds=60),
-            id      = "surge_scan",
-            name    = "급증 감지 스캔",
-            misfire_grace_time = 10,
-        )
+        # ★ 비활성화 유지: DataFetcher 연속 재시작 유발 문제로 비활성화
+        #   (피드 안정성 > 급증 포착 우선 — 재활성화 시 아래 주석 해제)
+        # self.scheduler.add_job(
+        #     self._surge_scan_loop,
+        #     trigger = IntervalTrigger(seconds=60),
+        #     id      = "surge_scan",
+        #     name    = "급증 감지 스캔",
+        #     misfire_grace_time = 10,
+        # )
 
         # ── 5분마다: 잔고 갱신
         self.scheduler.add_job(
@@ -893,6 +1397,85 @@ class CryptoSniperBot:
         logger.debug("스케줄 등록 완료")
 
     # ── 주기적 작업 ──────────────────────────────────────────────────────────
+
+    def _check_early_exit(self, pos, price: float) -> bool:
+        """
+        조기 청산 트리거 — TP1 미달 하락 패턴 대응.
+
+        두 가지 조건 중 하나라도 충족되면 즉시 시장가 청산.
+
+        트리거 A — ATR 기반 동적 트레일링 스탑
+          진입 후 peak_price 대비 ATR×0.5 이상 하락 시 청산.
+          단, 수익 구간(현재가 > 진입가)에서만 발동.
+          → 손실 구간에서는 원래 SL에 맡김 (이중 청산 방지)
+
+        트리거 B — 5m 모멘텀 이탈
+          5m RSI < 45 AND 5m 직전 캔들 종가가 2캔들 전보다 낮음
+          AND 현재 수익 > 0 인 상태.
+          → 단기 모멘텀이 꺾이면서 수익 구간에서 청산.
+
+        Returns
+        -------
+        True  : 청산 실행됨 (호출자는 continue로 이번 pos 스킵)
+        False : 청산 안 함
+        """
+        is_long = pos.direction == "LONG"
+        in_profit = (price > pos.entry_price) if is_long else (price < pos.entry_price)
+
+        # ── 트리거 A: ATR 기반 동적 트레일링 스탑 ──────────────────────────────
+        peak_price = getattr(pos, "peak_price", 0.0)  # 구버전 포지션 호환
+        if peak_price == 0.0:
+            peak_price = price
+            pos.peak_price = price
+
+        if in_profit and pos.atr_at_entry > 0 and peak_price > 0:
+            trail_gap = pos.atr_at_entry * 0.5   # ATR의 절반 → 변동성 대응
+            if is_long:
+                trail_sl = peak_price - trail_gap
+                triggered = price <= trail_sl
+            else:
+                trail_sl = peak_price + trail_gap
+                triggered = price >= trail_sl
+
+            if triggered:
+                pnl_pct = (
+                    (price - pos.entry_price) / pos.entry_price * 100
+                    if is_long
+                    else (pos.entry_price - price) / pos.entry_price * 100
+                )
+                reason = (
+                    f"트레일링 스탑 — 고점({peak_price:.4f}) 대비 "
+                    f"ATR×0.5({trail_gap:.4f}) 이탈 | 수익 {pnl_pct:+.2f}%"
+                )
+                logger.info(f"[{pos.symbol}] 조기 청산(트레일링): {reason}")
+                self._close_position_with_notify(pos.symbol, reason=reason)
+                return True
+
+        # ── 트리거 B: 5m 모멘텀 이탈 ───────────────────────────────────────────
+        if in_profit and self.fetcher is not None:
+            df_5m = self.fetcher.get_df(pos.symbol, self.cfg.strategy.confirm_timeframe)
+            if df_5m is not None and len(df_5m) >= 10:
+                try:
+                    # RSI < 45 확인 (talib 또는 ta 라이브러리 활용)
+                    import pandas_ta as pta
+                    rsi_5m = pta.rsi(df_5m["close"], length=14)
+                    if rsi_5m is not None and len(rsi_5m) >= 2:
+                        rsi_now = rsi_5m.iloc[-1]
+                        # 5m 종가 하락 추세: 최근 캔들이 2캔들 전보다 낮음
+                        close_falling = df_5m["close"].iloc[-1] < df_5m["close"].iloc[-3]
+                        if is_long and rsi_now < 45 and close_falling:
+                            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                            reason = (
+                                f"5m 모멘텀 이탈 — RSI={rsi_now:.1f}<45 + 종가 하락 "
+                                f"| 수익 {pnl_pct:+.2f}%"
+                            )
+                            logger.info(f"[{pos.symbol}] 조기 청산(모멘텀): {reason}")
+                            self._close_position_with_notify(pos.symbol, reason=reason)
+                            return True
+                except Exception as e:
+                    logger.debug(f"[{pos.symbol}] 5m 모멘텀 계산 실패: {e}")
+
+        return False
 
     def _update_all_positions(self) -> None:
         """1분마다 모든 포지션에 대해 현재가 기반 업데이트."""
@@ -911,6 +1494,11 @@ class CryptoSniperBot:
             price = self._get_current_price(pos.symbol)
             if price <= 0:
                 continue
+
+            # ── 조기 청산 트리거 (TP1 미달 하락 패턴 대응) ──────────────────
+            if self._check_early_exit(pos, price):
+                continue
+
             actions = self.rm.update_positions({pos.symbol: price})
             for action in actions:
                 # ★ SIMPLE MODE: CLOSE_FULL / CLOSE_PARTIAL 모두 즉시 실행
@@ -1139,13 +1727,15 @@ class CryptoSniperBot:
                 # handle_action → on_trade_closed 콜백에서 이미 DB 저장됨
                 # _close_position_with_notify 호출하면 DB 2중 저장 → 로컬 정리만
                 self.rm.close_position(symbol, reason="텔레그램 수동 청산")
-                # 쿨다운 등록
-                import time as _t
-                self._close_cooldown[symbol] = _t.time() + self._cooldown_minutes * 60
-                logger.info(f"[{symbol}] 쿨다운 등록: {self._cooldown_minutes}분")
                 self.notifier.send_raw(f"✅ `{symbol}` 청산 완료")
             else:
-                self.notifier.send_raw(f"❌ `{symbol}` 청산 실패")
+                # 거래소 주문 실패여도 로컬 포지션은 강제 정리
+                self.rm.close_position(symbol, reason="텔레그램 수동 청산 (강제 정리)")
+                self.notifier.send_raw(f"⚠️ `{symbol}` 청산 주문 실패 — 로컬 강제 정리")
+            # 수동 청산 쿨다운 보장 — 성공/실패 무관하게 항상 등록
+            import time as _t
+            self._close_cooldown[symbol] = _t.time() + self._cooldown_minutes * 60
+            logger.info(f"[{symbol}] 수동 청산 쿨다운 등록: {self._cooldown_minutes}분")
         except Exception as e:
             logger.error(f"텔레그램 청산 오류 [{symbol}]: {e}", exc_info=True)
             self.notifier.send_raw(f"❌ 청산 오류: {e}")
@@ -1218,9 +1808,11 @@ class CryptoSniperBot:
 
         # PnL 추정 (실제 체결가 없으므로 추정값)
         direction_mult = 1 if pos.direction == "LONG" else -1
-        pnl_usdt = (current_price - pos.entry_price) * pos.position_size * direction_mult * pos.leverage
+        # position_size는 이미 레버리지가 반영된 계약 수량
+        # → leverage를 다시 곱하면 이중 계산됨 (제거)
+        pnl_usdt = (current_price - pos.entry_price) * pos.position_size * direction_mult
 
-        from db_logger import TradeRecord
+        from utils.db_logger import TradeRecord
         from datetime import datetime, timezone
         trade = TradeRecord(
             symbol         = symbol,

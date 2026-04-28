@@ -142,6 +142,15 @@ def evaluate(
         logger.debug("HOLD 신호 → 채점 생략")
         return result
 
+    # BTC 약세 구조이면 LONG 진입 기준을 confidence 60 이상으로 상향
+    if (
+        signal_result.signal == "LONG"
+        and getattr(signal_result, "btc_weak", False)
+        and min_confidence < 60
+    ):
+        min_confidence = 60
+        logger.debug("BTC 약세 구조 → LONG min_confidence=60 적용")
+
     direction = signal_result.signal   # "LONG" or "SHORT"
     trend     = signal_result.trend
     momentum  = signal_result.momentum
@@ -294,6 +303,11 @@ def _calc_context(
     # ⑧ ADX 50 이상 초강세 추세                                   +2
     add("ADX≥50 초강세",            2, trend.adx >= 50)
 
+    # ⑧-b 거래량 최적 구간 우대 (1.5~2.0x) — 데이터 기반           +3
+    #   6건 진입, 승률 83%, PnL +36.65 — 가장 신뢰도 높은 구간
+    add("거래량 최적(1.5~2.0x)",    3,
+        1.5 <= volume.volume_ratio < 2.0)
+
     # ⑨ 골든/데드 크로스 + EMA 배열 동시 (추세 전환 확인)          +2
     if is_long:
         add("골든크로스+정배열",     2, trend.golden_cross and trend.ema_aligned_up)
@@ -358,11 +372,21 @@ def _calc_penalty(
     else:
         sub("EMA200 지지 (현재가>EMA200)", 1, trend.close > trend.ema_long)  # [완화] -3→-1
 
+    # ADX 불안정 구간 패널티 — 데이터 기반 (샘플 7건으로 완화 적용)
+    #   ADX 30~40: 7건 승률 29%, PnL -7.19 — 단, 샘플 부족으로 -5→-2 완화
+    sub("ADX 30~40 추세 불안정",     2,  30 <= trend.adx < 40)
+    #   ADX 50~60: 14건 승률 36%, PnL -12.66 — 추세 강하지만 과열 진입 많음
+    sub("ADX 50~60 과열 추세",       3,  50 <= trend.adx < 60)
+
     # ── 모멘텀 위험 ───────────────────────────────────────────────────────────
 
     # RSI 극단 구간 신규 진입 — 반전 위험 높음
     if is_long:
         sub("RSI 과매수(≥70) 진입",       5, momentum.rsi_overbought)
+        # RSI 63~69 구간: 신호는 통과하지만 늦은 추격 진입 가능성 (signal_engine 상한=63)
+        # signal_engine에서 이미 63 이상은 차단되나, scorer에도 penalty 유지
+        sub("RSI 63~69 늦은 추격 구간",   3,
+            63 <= momentum.rsi <= 69 and not momentum.rsi_overbought)
     else:
         sub("RSI 과매도(≤30) 진입",       5, momentum.rsi_oversold)
 
@@ -393,8 +417,14 @@ def _calc_penalty(
         sub("OBV 매수 우세",               4, volume.obv_rising)
 
     # 거래량 급등 없는 저강도 진입 (배수 1.0~1.5x)
-    sub("거래량 배수 낮음(1.0~1.5x)",     1,  # [완화] -3→-1: 필수조건 제거 후 이중처벌 방지
+    sub("거래량 배수 낮음(1.0~1.5x)",     1,  # 이중처벌 방지로 소폭 감점
         1.0 <= volume.volume_ratio < 1.5)
+    # 거래량 평균 이하 — 22건 손실 구간, 세력 부재
+    sub("거래량 평균 미달(0.8~1.0x)",      6,  # -4→-6 강화
+        0.8 <= volume.volume_ratio < 1.0)
+    # 거래량 극히 낮음 — 진입 금지 수준
+    sub("거래량 극저(< 0.8x)",            12,  # 사실상 진입 차단
+        volume.volume_ratio < 0.8)
 
     # BB Squeeze 없이 이미 밴드 상단 돌파 상태 (과열 진입)
     bb_width_ratio = trend.bb_width / trend.bb_mid if trend.bb_mid > 0 else 0

@@ -34,7 +34,7 @@ from typing import Optional
 import requests
 
 from db_logger       import TradeRecord, DailyStats
-from circuit_breaker import HaltEvent
+from risk.circuit_breaker import HaltEvent
 
 # ── 로거 ───────────────────────────────────────────────────────────────────────
 logger = logging.getLogger("telegram_notifier")

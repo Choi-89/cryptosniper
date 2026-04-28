@@ -496,10 +496,16 @@ class RiskManager:
             sl_price  = entry_price - sl_distance
             tp1_price = entry_price + tp1_distance
             tp2_price = entry_price + tp2_distance
+            # TP 고정 % 상한선: TP1 최대 +8%, TP2 최대 +15%
+            tp1_price = min(tp1_price, entry_price * 1.08)
+            tp2_price = min(tp2_price, entry_price * 1.15)
         else:  # SHORT
             sl_price  = entry_price + sl_distance
             tp1_price = entry_price - tp1_distance
             tp2_price = entry_price - tp2_distance
+            # TP 고정 % 상한선: TP1 최대 -8%, TP2 최대 -15%
+            tp1_price = max(tp1_price, entry_price * 0.92)
+            tp2_price = max(tp2_price, entry_price * 0.85)
 
         # 포지션 크기 계산
         size     = _calc_position_size(risk_amount, sl_distance, leverage, entry_price)
@@ -615,7 +621,16 @@ class RiskManager:
                 ))
                 pos.remaining_ratio = 1.0 - self.tp1_close_pct
                 pos.state           = PositionState.TP1_HIT
-                logger.info(f"[{pos.symbol}] TP1 50% 익절  price={price:.4f}")
+                # SL을 진입가 + SL거리×0.4 위치로 이동 (약간의 버퍼 사수)
+                sl_dist = abs(pos.entry_price - pos.sl_price)
+                if is_long:
+                    pos.sl_price = round(pos.entry_price + sl_dist * 0.4, 4)
+                else:
+                    pos.sl_price = round(pos.entry_price - sl_dist * 0.4, 4)
+                logger.info(
+                    f"[{pos.symbol}] TP1 50% 익절  price={price:.4f}  "
+                    f"SL → {pos.sl_price:.4f} (진입가+SL거리×0.4)"
+                )
 
         elif pos.state == PositionState.TP1_HIT:
 

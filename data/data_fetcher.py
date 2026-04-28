@@ -136,6 +136,16 @@ class DataFetcher:
         self._running = False
         self._reconnect_delay = RECONNECT_DELAY
 
+    def _log_subscription_summary(self) -> None:
+        """현재 감시 중인 캔들 구독 요약 로그."""
+        stream_count = len(self.symbols) * len(self.timeframes)
+        preview = [s.split("/")[0] for s in self.symbols[:5]]
+        logger.info(
+            f"캔들 감시 시작: 심볼 {len(self.symbols)}개  "
+            f"타임프레임={self.timeframes}  스트림={stream_count}개  "
+            f"예시={preview}"
+        )
+
     # ── 퍼블릭 메서드 ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -273,9 +283,85 @@ class DataFetcher:
 
     # ── WebSocket 이벤트 핸들러 ────────────────────────────────────────────────
 
+    # ── 누락 캔들 재생 ────────────────────────────────────────────────────────
+
+    def _replay_last_closed_candles(self) -> None:
+        """
+        WS 연결 직후 마지막으로 닫힌 15m 캔들을 REST로 재조회 후 콜백 강제 호출.
+
+        근본 원인:
+          _start_feeds() 재시작 → REST 로드(~14초) → WS 연결
+          이 과정에서 15m 캔들 닫힘(is_closed=True)이 WS 연결 전에 발생하면
+          이벤트를 영구적으로 놓침.
+
+          Binance WS는 연결 직후 현재 진행 중인 캔들 업데이트만 보내고,
+          이미 닫힌 캔들의 is_closed=True 이벤트는 재전송하지 않음.
+
+        해결:
+          WS 연결 성공 후 REST로 마지막 닫힌 캔들을 확인해서
+          WS 연결 직전(15분 이내)에 닫힌 캔들이 있으면 콜백을 직접 호출.
+
+        이중 발화 방지:
+          WS로 이미 받은 캔들 (candle_close_ts > ws_connected_at) 은 재생 안 함.
+          15분(캔들 1개) 이상 오래된 것도 재생 안 함.
+        """
+        ws_connected_at = time.time()
+
+        # 15m만 대상 (신호 판단은 15m 캔들 닫힘에서만 발생)
+        if "15m" not in self.timeframes:
+            return
+
+        # 안정화 대기 (WS 메시지 수신 시작까지)
+        time.sleep(2)
+
+        for symbol in self.symbols:
+            try:
+                # REST로 최신 캔들 2개 조회
+                ohlcv = self.exchange.fetch_ohlcv(symbol, "15m", limit=2)
+                if not ohlcv or len(ohlcv) < 2:
+                    continue
+
+                # ohlcv[-2] = 마지막으로 완전히 닫힌 캔들
+                # ohlcv[-1] = 현재 진행 중인 캔들 (닫히지 않음)
+                last_closed    = ohlcv[-2]
+                candle_open_ts = last_closed[0] / 1000      # ms → sec
+                candle_close_ts = candle_open_ts + 900       # 15분 후 = 닫힘 시각
+
+                # WS 연결 이후 닫힌 캔들 → WS가 받았거나 받을 예정 → 재생 불필요
+                if candle_close_ts > ws_connected_at:
+                    continue
+
+                # 15분(900초) 이상 전에 닫힌 캔들 → 이미 처리됐을 것 → 재생 불필요
+                time_since_close = ws_connected_at - candle_close_ts
+                if time_since_close > 900:
+                    continue
+
+                # WS 연결 직전 15분 이내에 닫힌 캔들 → 누락 가능성 → 재생
+                df = self.get_df(symbol, "15m")
+                if df is None:
+                    continue
+
+                logger.info(
+                    f"[REPLAY] {symbol.split('/')[0]} 15m "
+                    f"누락 캔들 재생 — WS 연결 {time_since_close:.0f}초 전 닫힘"
+                )
+
+                if self.on_closed_candle:
+                    self.on_closed_candle(symbol, "15m", df)
+
+            except Exception as e:
+                logger.debug(f"[REPLAY] {symbol} 재생 실패: {e}")
+
     def _on_open(self, ws) -> None:
         logger.info("WebSocket 연결 성공")
+        self._log_subscription_summary()
         self._reconnect_delay = RECONNECT_DELAY  # 성공 시 딜레이 초기화
+        # WS 연결 직후 누락됐을 수 있는 마지막 15m 캔들 재생
+        threading.Thread(
+            target=self._replay_last_closed_candles,
+            daemon=True,
+            name="replay-closed",
+        ).start()
 
     def _on_message(self, ws, raw: str) -> None:
         """

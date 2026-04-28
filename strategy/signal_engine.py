@@ -69,6 +69,7 @@ class SignalResult:
     momentum:        Optional[MomentumResult] = None
     volume:          Optional[VolumeResult]   = None
     entry_price:     float = 0.0
+    btc_weak:        bool  = False  # BTC 단기 하락 구조 — LONG confidence 최소 60 강제
 
 
 # ── 메인 함수 ──────────────────────────────────────────────────────────────────
@@ -110,6 +111,10 @@ def check(
             result.reject_reason = f"BTC 시장 필터: {btc_reject}"
             logger.info(f"[{symbol}] HOLD — {result.reject_reason}")
             return result
+        # BTC 단기 하락 구조(EMA20 < EMA50) — 차단 아님, confidence 최소 60 강제
+        if _is_btc_weak(btc_df_1h):
+            result.btc_weak = True
+            logger.debug(f"[{symbol}] BTC 약세 구조 감지 — LONG confidence 최소 60 강제")
 
     # ── Step 1. 지표 계산 ─────────────────────────────────────────────────────
     trend_1h  = ti.calculate(df_1h)
@@ -135,6 +140,17 @@ def check(
     result.momentum   = mom_15m
     result.volume     = vol_15m
     result.entry_price = trend_1h.close
+
+    # ── Step 1.5. 15m StochRSI 과열 필터 ─────────────────────────────────
+    # StochRSI K > 80 이면서 K가 D 아래로 꺾인 경우 → LONG 차단
+    # 이미 과열 구간에서 되돌림 중인 종목에 늦게 진입하는 패턴 차단
+    if mom_15m.stoch_k > 80 and not mom_15m.stoch_k_above_d:
+        result.reject_reason = (
+            f"15m StochRSI 과열 후 하락 전환: "
+            f"K={mom_15m.stoch_k:.1f} > 80 + K<D → 늦은 추격 진입 차단"
+        )
+        logger.info(f"[{symbol}] HOLD — {result.reject_reason}")
+        return result
 
     # ── Step 2. 방향 판단 ─────────────────────────────────────────────────────
     long_signal, long_reject  = _check_long(symbol, trend_1h, mom_15m, vol_15m)
@@ -214,7 +230,7 @@ def _check_long(
         T3. +DI > -DI       (방향성: 매수 우세)
       [모멘텀]
         M1. 15M MACD 히스토그램 양수 (매수 모멘텀 존재)
-        M2. RSI 40~65 구간  (과매수 아닌 상태)
+        M2. RSI 40~63 구간  (63 이상 늦은 추격 차단)
       [거래량]
         V1. 거래량 급등 (≥ 평균 × 2.0)
 
@@ -241,8 +257,8 @@ def _check_long(
 
     # M2. RSI 범위
     # [테스트 완화] 30~75 (원래: 40~65)
-    if not (40 <= momentum.rsi <= 65):
-        return False, f"RSI={momentum.rsi:.1f} 롱 진입 구간(40~65) 벗어남"
+    if not (40 <= momentum.rsi <= 63):
+        return False, f"RSI={momentum.rsi:.1f} 롱 진입 구간(40~63) 벗어남"
 
     # V1. 거래량 급등 — 필수 조건 제거, signal_scorer 감점으로만 처리
     # 원래: 2.0x 필수 → 테스트 완화 1.0x → 현재: 조건 제거
@@ -513,6 +529,18 @@ def _check_btc_market(btc_df: pd.DataFrame) -> str:
     #     )
 
     return ""
+
+
+def _is_btc_weak(btc_df: pd.DataFrame) -> bool:
+    """
+    BTC 단기 하락 구조 여부 판단 (차단이 아닌 경고 수준).
+    EMA20 < EMA50 = 단기 하락 배열 → LONG confidence 최소 60 강제.
+    """
+    btc_trend = ti.calculate(btc_df)
+    if btc_trend is None:
+        return False
+    return btc_trend.ema_short < btc_trend.ema_mid
+
 
 # ── 유틸 ───────────────────────────────────────────────────────────────────────
 

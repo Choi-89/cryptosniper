@@ -219,6 +219,11 @@ class OrderExecutor:
         entry_side = "buy" if is_long else "sell"
         close_side = "sell" if is_long else "buy"
 
+        # ── 0. ISOLATED 마진 모드 강제 설정 ──────────────────────────────────
+        # CROSSED 마진에서는 다른 포지션 담보가 함께 청산 위험에 노출됨
+        # 진입 전 매번 ISOLATED로 강제 설정 (이미 ISOLATED여도 API 오류 없음)
+        self._ensure_isolated_margin(plan.symbol)
+
         # ── 1. 진입 시장가 주문 ────────────────────────────────────────────────
         logger.info(
             f"[{plan.symbol}] 진입 주문  "
@@ -703,24 +708,66 @@ class OrderExecutor:
 
     # ── 내부: 활성 주문 전체 취소 ─────────────────────────────────────────────
 
+    def _ensure_isolated_margin(self, symbol: str) -> None:
+        """
+        포지션 진입 전 ISOLATED 마진 모드를 보장.
+
+        Binance Futures는 심볼별로 마진 모드를 설정.
+        CROSSED → 계좌 전체 담보가 노출되므로 ISOLATED로 강제.
+        이미 ISOLATED인 경우: API가 에러를 반환하지만 무시해도 안전.
+        포지션이 열려있는 상태에서 변경 시도하면 거래소 에러 → WARNING 처리.
+        """
+        raw_symbol = symbol.replace("/", "").replace(":USDT", "").replace(":USD", "")
+        try:
+            self.exchange.fapiPrivatePostMarginType({
+                "symbol":     raw_symbol,
+                "marginType": "ISOLATED",
+            })
+            logger.info(f"[{symbol}] 마진 모드: ISOLATED 설정 완료")
+        except Exception as e:
+            err = str(e)
+            # "No need to change margin type" = 이미 ISOLATED → 정상
+            if "No need to change" in err or "already" in err.lower():
+                logger.debug(f"[{symbol}] 마진 모드: 이미 ISOLATED")
+            else:
+                logger.warning(f"[{symbol}] ISOLATED 마진 설정 실패 (무시): {e}")
+
     def _cancel_active_orders(self, symbol: str) -> None:
         """
         해당 심볼의 미체결 주문 전부 취소.
 
-        두 가지 방식으로 취소:
-          1. 캐시(_active_orders)에 저장된 주문 ID로 취소
-             → 봇이 등록한 SL/TP 주문 ID를 기억하고 있을 때
-          2. 거래소에서 해당 심볼의 미체결 주문 전체 조회 후 취소
-             → 캐시가 없거나 캐시와 실제가 불일치할 때 (안전망)
+        취소 순서:
+          1. fapiPrivate DELETE allOpenOrders (일괄 취소 — 가장 확실)
+             → 한 번의 API 호출로 해당 심볼 전체 취소
+          2. 캐시(_active_orders) 기반 개별 취소 (1번 실패 시 폴백)
+          3. fetch_open_orders → 개별 취소 (최종 안전망)
 
         호출 시점:
           - 봇이 직접 청산할 때 (CLOSE_FULL)
           - 거래소에서 SL/TP 체결로 포지션이 사라진 걸 감지했을 때
             → 남은 반대쪽 TP/SL 주문이 다음 포지션에 영향 주는 걸 방지
         """
-        # 1. 캐시 기반 취소
+        # ccxt symbol → Binance symbol 변환 (BTC/USDT:USDT → BTCUSDT)
+        raw_symbol = symbol.replace("/", "").replace(":USDT", "").replace(":USD", "")
+
+        # ── 1. fapiPrivate 일괄 취소 (가장 확실한 방법) ──────────────────────
+        bulk_ok = False
+        try:
+            self.exchange.fapiPrivateDeleteAllopenorders({"symbol": raw_symbol})
+            logger.info(f"[{symbol}] 미체결 주문 전체 취소 완료 (fapiPrivate 일괄)")
+            bulk_ok = True
+        except Exception as e:
+            logger.warning(
+                f"[{symbol}] fapiPrivate 일괄 취소 실패 ({e}) — 개별 취소로 폴백"
+            )
+
+        if bulk_ok:
+            self._active_orders.pop(symbol, None)
+            return
+
+        # ── 2. 캐시 기반 개별 취소 (폴백 1) ─────────────────────────────────
         orders = self._active_orders.get(symbol, {})
-        cancelled_ids = set()
+        cancelled_ids: set[str] = set()
         for order_type, order_id in orders.items():
             if not order_id:
                 continue
@@ -731,7 +778,7 @@ class OrderExecutor:
             except Exception as e:
                 logger.warning(f"[{symbol}] {order_type} 취소 실패: {e}")
 
-        # 2. 거래소 전체 미체결 주문 조회 후 잔여 주문 취소 (안전망)
+        # ── 3. fetch_open_orders 기반 잔여 주문 취소 (폴백 2 — 최종 안전망) ──
         try:
             open_orders = self.exchange.fetch_open_orders(symbol)
             for order in open_orders:

@@ -89,7 +89,6 @@ class CoinScanner:
                 "adjustForTimeDifference": True,
             },
             "enableRateLimit": True,
-            "urls": DEMO_TRADING_URLS,
         })
         if demo:
             self.exchange.urls.update(DEMO_TRADING_URLS)
