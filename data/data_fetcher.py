@@ -417,6 +417,11 @@ class DataFetcher:
 
             # 캔들 닫힘 시 콜백 호출
             if is_closed and self.on_closed_candle:
+                if tf_raw == "15m":
+                    logger.info(
+                        f"WS 15m candle close received: {symbol} "
+                        f"ts={candle['timestamp']} close={candle['close']:.6f}"
+                    )
                 df = self.get_df(symbol, tf_raw)
                 if df is not None:
                     self.on_closed_candle(symbol, tf_raw, df)

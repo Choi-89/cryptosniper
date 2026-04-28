@@ -184,6 +184,16 @@ class CryptoSniperBot:
         self._processing: dict[str, bool] = {}
         self._processing_lock = threading.Lock()
 
+        # Feed restarts near 15m candle boundaries can miss Binance's
+        # one-shot kline close event. Defer non-initial restarts around
+        # 00/15/30/45 so the existing WebSocket can receive the close.
+        self._feed_restart_lock = threading.Lock()
+        self._pending_feed_symbols: list[str] | None = None
+        self._feed_restart_timer: threading.Timer | None = None
+        self._feed_restart_guard_before_sec = 120
+        self._feed_restart_guard_after_sec = 75
+        self._last_closed_candles: set[tuple[str, str, str]] = set()
+
         # 청산 후 쿨다운 {symbol: close_time}
         # 같은 종목 재진입 시 COOLDOWN_MINUTES 경과 여부 체크
         self._close_cooldown: dict[str, float] = {}
@@ -207,6 +217,83 @@ class CryptoSniperBot:
         position_symbols = {pos.symbol for pos in self.rm.get_all_positions()}
         desired = list(dict.fromkeys(base + list(position_symbols) + list(self._scan_candidates)))
         return desired
+
+    def _feed_restart_delay_seconds(self) -> int:
+        """Return delay needed to avoid restarting near 15m candle close."""
+        now = time.time()
+        tm = time.localtime(now)
+        seconds_into_15m = (tm.tm_min % 15) * 60 + tm.tm_sec
+        seconds_to_next = 900 - seconds_into_15m
+        if seconds_to_next == 900:
+            seconds_to_next = 0
+
+        before = self._feed_restart_guard_before_sec
+        after = self._feed_restart_guard_after_sec
+
+        if seconds_to_next <= before:
+            return int(seconds_to_next + after + 10)
+        if seconds_into_15m <= after:
+            return int(after - seconds_into_15m + 10)
+        return 0
+
+    def _request_feed_restart(self, symbols: list[str], reason: str) -> None:
+        """
+        Restart feeds unless we are close to a 15m candle boundary.
+
+        The delayed path coalesces multiple requests so scan/B-group churn cannot
+        repeatedly disconnect the WebSocket around 00/15/30/45.
+        """
+        symbols = list(dict.fromkeys(symbols))
+        with self._symbols_lock:
+            has_active_feed = bool(self._subscribed_symbols)
+        if not has_active_feed:
+            self._start_feeds(symbols)
+            return
+
+        delay = self._feed_restart_delay_seconds()
+        if delay <= 0:
+            self._start_feeds(symbols)
+            return
+
+        with self._feed_restart_lock:
+            self._pending_feed_symbols = symbols
+            timer_alive = (
+                self._feed_restart_timer is not None
+                and self._feed_restart_timer.is_alive()
+            )
+            if timer_alive:
+                logger.info(
+                    f"feed restart deferred update ({reason}) -> {len(symbols)} symbols"
+                )
+                return
+
+            logger.info(
+                f"feed restart deferred {delay}s near 15m boundary ({reason})"
+            )
+            self._feed_restart_timer = threading.Timer(
+                delay,
+                self._run_deferred_feed_restart,
+            )
+            self._feed_restart_timer.daemon = True
+            self._feed_restart_timer.start()
+
+    def _run_deferred_feed_restart(self) -> None:
+        """Run the latest deferred feed restart when the candle boundary is safe."""
+        with self._feed_restart_lock:
+            symbols = self._pending_feed_symbols
+            self._pending_feed_symbols = None
+            self._feed_restart_timer = None
+
+        if not symbols or not self._running:
+            return
+
+        delay = self._feed_restart_delay_seconds()
+        if delay > 0:
+            self._request_feed_restart(symbols, "deferred_retry")
+            return
+
+        logger.info(f"deferred feed restart executing: {len(symbols)} symbols")
+        self._start_feeds(symbols)
 
     # ── 라이프사이클 ──────────────────────────────────────────────────────────
 
@@ -278,6 +365,12 @@ class CryptoSniperBot:
         self._stop_event.set()
 
         logger.info("봇 종료 시작...")
+
+        with self._feed_restart_lock:
+            if self._feed_restart_timer and self._feed_restart_timer.is_alive():
+                self._feed_restart_timer.cancel()
+            self._feed_restart_timer = None
+            self._pending_feed_symbols = None
 
         self.scheduler.shutdown(wait=False)
 
@@ -354,6 +447,16 @@ class CryptoSniperBot:
         # 15m 캔들 닫힘 시에만 진입 판단 (5m은 데이터 축적용, 1h는 추세용)
         if timeframe != self.cfg.strategy.entry_timeframe:
             return
+
+        candle_ts = str(df.index[-1]) if df is not None and not df.empty else ""
+        candle_key = (symbol, timeframe, candle_ts)
+        with self._processing_lock:
+            if candle_key in self._last_closed_candles:
+                logger.debug(f"[{symbol}] duplicate {timeframe} candle ignored: {candle_ts}")
+                return
+            self._last_closed_candles.add(candle_key)
+            if len(self._last_closed_candles) > 5000:
+                self._last_closed_candles = set(list(self._last_closed_candles)[-2500:])
 
         logger.info(f"[{symbol}] 15m 캔들 닫힘 감지 → 신호 판단 시작")
 
@@ -612,7 +715,7 @@ class CryptoSniperBot:
             all_symbols = list(set(self.scanner.get_watchlist()) |
                                set(new_surges) |
                                {pos.symbol for pos in self.rm.get_all_positions()})
-            self._start_feeds(all_symbols)
+            self._request_feed_restart(all_symbols, "surge_scan")
 
             # 즉시 신호 체크 (캔들 닫힘 기다리지 않고 현재 데이터로)
             for symbol in truly_new:
@@ -648,7 +751,7 @@ class CryptoSniperBot:
                     f"추가={ [s.split('/')[0] for s in sorted(added)] if added else [] }  "
                     f"제거={ [s.split('/')[0] for s in sorted(removed)] if removed else [] }"
                 )
-                self._start_feeds(sorted(desired_feed))
+                self._request_feed_restart(sorted(desired_feed), "watchlist_b_refresh")
             else:
                 logger.info(
                     f"B군 갱신 완료: watchlist={len(new_watchlist)}개 "
@@ -834,7 +937,7 @@ class CryptoSniperBot:
                     f"추가={ [s.split('/')[0] for s in sorted(added)] if added else [] }  "
                     f"제거={ [s.split('/')[0] for s in sorted(removed)] if removed else [] }"
                 )
-                self._start_feeds(sorted(desired_feed))
+                self._request_feed_restart(sorted(desired_feed), "watchlist_refresh")
             else:
                 logger.info(
                     f"관심 심볼 갱신 완료: {len(new_watchlist)}개 "
@@ -1272,6 +1375,31 @@ class CryptoSniperBot:
         except Exception as e:
             logger.debug(f"[SQUEEZE] DB 기록 실패: {e}")
 
+    def _poll_entry_candle_close(self) -> None:
+        """REST fallback for 15m candle close when WebSocket close events are silent."""
+        if self.fetcher is None:
+            return
+
+        timeframe = self.cfg.strategy.entry_timeframe
+        symbols = set(self._scan_candidates)
+        symbols.update(pos.symbol for pos in self.rm.get_all_positions())
+        if not symbols:
+            logger.info("15m candle poll skipped: no scan candidates")
+            return
+
+        logger.info(
+            f"15m candle poll start: {len(symbols)} symbols "
+            f"{[s.split('/')[0] for s in sorted(symbols)[:8]]}"
+        )
+        for symbol in sorted(symbols):
+            try:
+                self.fetcher._fetch_and_store(symbol, timeframe)
+                df = self.fetcher.get_df(symbol, timeframe)
+                if df is not None and not df.empty:
+                    self._on_candle_close(symbol, timeframe, df)
+            except Exception as e:
+                logger.debug(f"[{symbol}] 15m candle poll failed: {e}")
+
     def _scheduled_scan(self) -> None:
         """스케줄러에서 5분마다 호출 — 후보 목록 갱신, 신규 feed 추가.
 
@@ -1309,11 +1437,18 @@ class CryptoSniperBot:
                 f"스캔 후보 중 feed 밖 신규 {len(truly_new)}개 → feed 추가 재구독: "
                 f"{[s.split('/')[0] for s in sorted(truly_new)]}"
             )
-            self._start_feeds(merged)
+            self._request_feed_restart(merged, "scheduled_scan_new_symbols")
 
     # ── 스케줄 등록 ──────────────────────────────────────────────────────────
 
     def _register_schedules(self) -> None:
+        self.scheduler.add_job(
+            self._poll_entry_candle_close,
+            trigger = CronTrigger(minute="0,15,30,45", second=10, timezone="UTC"),
+            id      = "entry_candle_poll",
+            name    = "15m candle close REST fallback",
+            misfire_grace_time = 20,
+        )
         """APScheduler 작업 등록."""
 
         # ── 자정 00:01 UTC: 관심 심볼 갱신 (REST 대량 호출은 여기서만 발생)
