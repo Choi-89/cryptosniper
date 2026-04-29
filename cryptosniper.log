@@ -1,9 +1,699 @@
-2026-04-28 12:40:31 [INFO] main                 정기 스캔 시작...
-2026-04-28 12:40:31 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 30개 + 급증 감지 0개 대상) ===
-2026-04-28 12:40:48 [INFO] coin_scanner         === 스캔 완료: 최종 후보 5개 ===
-2026-04-28 12:40:48 [INFO] coin_scanner           TURTLE/USDT:USDT     | score=4.8 | ADX=49.0 | ATR%=3.06% | VolRatio=2.1x
-2026-04-28 12:40:48 [INFO] coin_scanner           SIREN/USDT:USDT      | score=4.5 | ADX=36.3 | ATR%=3.89% | VolRatio=2.3x
-2026-04-28 12:40:48 [INFO] coin_scanner           OPEN/USDT:USDT       | score=4.4 | ADX=41.8 | ATR%=2.23% | VolRatio=3.6x
-2026-04-28 12:40:48 [INFO] coin_scanner           HIGH/USDT:USDT       | score=4.2 | ADX=40.4 | ATR%=3.54% | VolRatio=2.0x
-2026-04-28 12:40:48 [INFO] coin_scanner           AXS/USDT:USDT        | score=1.8 | ADX=26.6 | ATR%=2.80% | VolRatio=1.5x
-2026-04-28 12:40:48 [INFO] main                 스캔 완료: 5개 후보
+2026-04-29 02:22:12 [INFO] db_logger            DbLogger 초기화: C:\Users\0\OneDrive\바탕 화면\jiwhan\cryptosniper\cryptosniper.db
+2026-04-29 02:22:12 [INFO] circuit_breaker      CircuitBreaker 시작  자본=150.00U  일일손실한도=3.0%  연속손절한도=3회
+2026-04-29 02:22:12 [INFO] main                 ============================================================
+2026-04-29 02:22:12 [INFO] main                   CryptoSniper Bot 시작
+2026-04-29 02:22:12 [INFO] main                   자본: 150.00 USDT
+2026-04-29 02:22:12 [INFO] main                   모드: 실거래
+2026-04-29 02:22:12 [INFO] main                   ── 실효 전략 파라미터 ──
+2026-04-29 02:22:12 [INFO] main                   min_score_to_enter : 5
+2026-04-29 02:22:12 [INFO] main                   min_confidence     : 40
+2026-04-29 02:22:12 [INFO] main                   risk_per_trade_pct : 0.8%
+2026-04-29 02:22:12 [INFO] main                   max_positions      : 2
+2026-04-29 02:22:12 [INFO] main                 ============================================================
+2026-04-29 02:22:12 [INFO] telegram_notifier    TelegramNotifier polling 시작
+2026-04-29 02:22:12 [INFO] telegram_notifier    TelegramNotifier 시작 (bot=cryptoSniper)
+2026-04-29 02:22:12 [INFO] main                 텔레그램 명령 핸들러 등록 완료
+2026-04-29 02:22:12 [INFO] main                 관심 심볼 초기 갱신 중...
+2026-04-29 02:22:12 [INFO] coin_scanner         === 관심 심볼 갱신 시작 (A군+B군) ===
+2026-04-29 02:22:12 [INFO] coin_scanner         마켓 정보 로드 중...
+2026-04-29 02:22:12 [INFO] coin_scanner         총 715개 마켓 로드 완료
+2026-04-29 02:22:12 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 02:22:22 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 02:22:30 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 02:22:30 [INFO] coin_scanner         === 관심 심볼 갱신 완료: 10개 (A군=10 B군=0) ===
+2026-04-29 02:22:30 [INFO] coin_scanner           A군: ['BTC', 'ETH', 'XAU', 'XAG', 'CL', 'SOL', 'ORCA', 'DOGE', 'ZKJ', 'XRP']
+2026-04-29 02:22:30 [INFO] coin_scanner           B군: []
+2026-04-29 02:22:30 [INFO] main                 관심 심볼 갱신 → feed 재구독 (10개)  추가=['BTC', 'CL', 'DOGE', 'ETH', 'ORCA', 'SOL', 'XAG', 'XAU', 'XRP', 'ZKJ']  제거=[]
+2026-04-29 02:22:30 [INFO] data_fetcher         DataFetcher 시작
+2026-04-29 02:22:30 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-29 02:22:35 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-29 02:22:35 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/btcu...
+2026-04-29 02:22:35 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-29 02:22:35 [INFO] orderbook            OrderBookManager 종료
+2026-04-29 02:22:35 [INFO] orderbook            OrderBookManager 시작
+2026-04-29 02:22:35 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@depth20@100ms/clusdt@depth20@10...
+2026-04-29 02:22:35 [INFO] main                 피드 시작: 10개 심볼  ['15m', '1h', '5m']
+2026-04-29 02:22:35 [INFO] main                 === 거래소 포지션 복구 시작 ===
+2026-04-29 02:22:35 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-29 02:22:35 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-29 02:22:35 [INFO] data_fetcher         캔들 감시 시작: 심볼 10개  타임프레임=['15m', '1h', '5m']  스트림=30개  예시=['BTC', 'CL', 'DOGE', 'ETH', 'ORCA']
+2026-04-29 02:22:35 [INFO] main                 === 복구할 포지션 없음 ===
+2026-04-29 02:22:35 [INFO] main                 초기 코인 스캔 시작...
+2026-04-29 02:22:35 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:22:37 [INFO] data_fetcher         [REPLAY] BTC 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:37 [INFO] main                 [BTC/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:37 [INFO] main                 [BTC/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 1.6 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 14/20 < 15; volume spike 0.2x < 3.0x; not first spike: prior spikes=1
+2026-04-29 02:22:37 [INFO] data_fetcher         [REPLAY] CL 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:37 [INFO] main                 [CL/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:37 [INFO] main                 [CL/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.1 < 2.0; 15m volume 0.3x < 2.0x; squeeze_5m: quiet bars 12/20 < 15; volume spike 0.5x < 3.0x; current candle is not bullish
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] DOGE 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [DOGE/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [DOGE/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.4 < 2.0; 15m volume 0.4x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 12/20 < 15; volume spike 0.3x < 3.0x
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] ETH 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [ETH/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [ETH/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: volume spike 0.2x < 3.0x; not first spike: prior spikes=1
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] ORCA 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [ORCA/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [ORCA/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 1.1 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 11/20 < 15; volume spike 0.3x < 3.0x
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] SOL 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [SOL/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [SOL/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.8 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 10/20 < 15; volume spike 0.2x < 3.0x
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] XAG 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [XAG/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [XAG/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.2 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 12/20 < 15; volume spike 0.9x < 3.0x; current candle is not bullish
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] XAU 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [XAU/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [XAU/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.7 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 11/20 < 15; volume spike 0.3x < 3.0x
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] XRP 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [XRP/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [XRP/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.4 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 11/20 < 15; volume spike 0.4x < 3.0x
+2026-04-29 02:22:38 [INFO] data_fetcher         [REPLAY] ZKJ 15m 누락 캔들 재생 — WS 연결 456초 전 닫힘
+2026-04-29 02:22:38 [INFO] main                 [ZKJ/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:22:38 [INFO] main                 [ZKJ/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.3 < 2.0; 15m volume 0.2x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 14/20 < 15; volume spike 0.5x < 3.0x; current candle is not bullish
+2026-04-29 02:22:41 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:22:41 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:22:41 [WARNING] main                 초기 스캔에서 후보 코인 없음 — 관심 심볼 전체로 시작
+2026-04-29 02:22:41 [INFO] data_fetcher         DataFetcher 종료 중...
+2026-04-29 02:22:41 [WARNING] data_fetcher         WebSocket 닫힘 (code=None, msg=None)
+2026-04-29 02:22:41 [INFO] data_fetcher         DataFetcher 종료 완료
+2026-04-29 02:22:41 [INFO] data_fetcher         DataFetcher 시작
+2026-04-29 02:22:41 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-29 02:22:45 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 02:22:46 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-29 02:22:46 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=xagusdt@kline_15m/xagusdt@kline_1h/xagu...
+2026-04-29 02:22:46 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-29 02:22:46 [INFO] orderbook            OrderBookManager 종료
+2026-04-29 02:22:46 [WARNING] orderbook            호가창 WebSocket 닫힘 (code=None)
+2026-04-29 02:22:46 [INFO] orderbook            OrderBookManager 시작
+2026-04-29 02:22:46 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=xagusdt@depth20@100ms/solusdt@depth20@1...
+2026-04-29 02:22:46 [INFO] main                 피드 시작: 10개 심볼  ['15m', '1h', '5m']
+2026-04-29 02:22:46 [INFO] main                 스케줄러 시작 완료
+2026-04-29 02:22:46 [INFO] main                 봇 정상 가동 중... (Ctrl+C 로 종료)
+2026-04-29 02:22:46 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-29 02:22:46 [INFO] data_fetcher         캔들 감시 시작: 심볼 10개  타임프레임=['15m', '1h', '5m']  스트림=30개  예시=['XAG', 'SOL', 'ETH', 'ORCA', 'DOGE']
+2026-04-29 02:22:46 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] XAG 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] SOL 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] ETH 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] ORCA 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] DOGE 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] BTC 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] XRP 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] ZKJ 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:48 [INFO] data_fetcher         [REPLAY] CL 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:22:49 [INFO] data_fetcher         [REPLAY] XAU 15m 누락 캔들 재생 — WS 연결 467초 전 닫힘
+2026-04-29 02:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:27:46 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:27:46 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:27:52 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:27:52 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 02:32:46 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:32:46 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:32:52 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:32:52 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:37:46 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:37:46 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:37:47 [INFO] main                 봇 종료 시작...
+2026-04-29 02:37:47 [INFO] data_fetcher         DataFetcher 종료 중...
+2026-04-29 02:37:47 [WARNING] data_fetcher         WebSocket 닫힘 (code=None, msg=None)
+2026-04-29 02:37:47 [INFO] data_fetcher         DataFetcher 종료 완료
+2026-04-29 02:37:47 [INFO] orderbook            OrderBookManager 종료
+2026-04-29 02:37:47 [WARNING] orderbook            호가창 WebSocket 닫힘 (code=None)
+2026-04-29 02:37:49 [INFO] telegram_notifier    TelegramNotifier 종료 중...
+2026-04-29 02:37:49 [INFO] main                 봇 종료 완료
+2026-04-29 02:37:52 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:37:52 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:37:56 [INFO] db_logger            DbLogger 초기화: C:\Users\0\OneDrive\바탕 화면\jiwhan\cryptosniper\cryptosniper.db
+2026-04-29 02:37:56 [INFO] circuit_breaker      CircuitBreaker 시작  자본=150.00U  일일손실한도=3.0%  연속손절한도=3회
+2026-04-29 02:37:56 [INFO] main                 ============================================================
+2026-04-29 02:37:56 [INFO] main                   CryptoSniper Bot 시작
+2026-04-29 02:37:56 [INFO] main                   자본: 150.00 USDT
+2026-04-29 02:37:56 [INFO] main                   모드: 실거래
+2026-04-29 02:37:56 [INFO] main                   ── 실효 전략 파라미터 ──
+2026-04-29 02:37:56 [INFO] main                   min_score_to_enter : 5
+2026-04-29 02:37:56 [INFO] main                   min_confidence     : 40
+2026-04-29 02:37:56 [INFO] main                   risk_per_trade_pct : 0.8%
+2026-04-29 02:37:56 [INFO] main                   max_positions      : 2
+2026-04-29 02:37:56 [INFO] main                 ============================================================
+2026-04-29 02:37:56 [INFO] telegram_notifier    TelegramNotifier polling 시작
+2026-04-29 02:37:56 [INFO] telegram_notifier    TelegramNotifier 시작 (bot=cryptoSniper)
+2026-04-29 02:37:56 [INFO] main                 텔레그램 명령 핸들러 등록 완료
+2026-04-29 02:37:56 [INFO] main                 관심 심볼 초기 갱신 중...
+2026-04-29 02:37:56 [INFO] coin_scanner         === 관심 심볼 갱신 시작 (A군+B군) ===
+2026-04-29 02:37:56 [INFO] coin_scanner         마켓 정보 로드 중...
+2026-04-29 02:37:56 [INFO] coin_scanner         총 715개 마켓 로드 완료
+2026-04-29 02:37:56 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 02:38:14 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 02:38:14 [INFO] coin_scanner         === 관심 심볼 갱신 완료: 10개 (A군=10 B군=0) ===
+2026-04-29 02:38:14 [INFO] coin_scanner           A군: ['BTC', 'ETH', 'XAU', 'XAG', 'CL', 'SOL', 'ORCA', 'DOGE', 'ZKJ', 'XRP']
+2026-04-29 02:38:14 [INFO] coin_scanner           B군: []
+2026-04-29 02:38:14 [INFO] main                 관심 심볼 갱신 → feed 재구독 (10개)  추가=['BTC', 'CL', 'DOGE', 'ETH', 'ORCA', 'SOL', 'XAG', 'XAU', 'XRP', 'ZKJ']  제거=[]
+2026-04-29 02:38:14 [INFO] data_fetcher         DataFetcher 시작
+2026-04-29 02:38:14 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-29 02:38:19 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-29 02:38:19 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/btcu...
+2026-04-29 02:38:19 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-29 02:38:19 [INFO] orderbook            OrderBookManager 종료
+2026-04-29 02:38:19 [INFO] orderbook            OrderBookManager 시작
+2026-04-29 02:38:19 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=btcusdt@depth20@100ms/clusdt@depth20@10...
+2026-04-29 02:38:19 [INFO] main                 피드 시작: 10개 심볼  ['15m', '1h', '5m']
+2026-04-29 02:38:19 [INFO] main                 === 거래소 포지션 복구 시작 ===
+2026-04-29 02:38:19 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-29 02:38:19 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-29 02:38:19 [INFO] data_fetcher         캔들 감시 시작: 심볼 10개  타임프레임=['15m', '1h', '5m']  스트림=30개  예시=['BTC', 'CL', 'DOGE', 'ETH', 'ORCA']
+2026-04-29 02:38:20 [INFO] main                 === 복구할 포지션 없음 ===
+2026-04-29 02:38:20 [INFO] main                 초기 코인 스캔 시작...
+2026-04-29 02:38:20 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:38:21 [INFO] data_fetcher         [REPLAY] BTC 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:21 [INFO] main                 [BTC/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:21 [INFO] main                 [BTC/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.0 < 2.0; 15m volume 0.4x < 2.0x; squeeze_5m: volume spike 1.5x < 3.0x; not first spike: prior spikes=1; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 1.5x < 2.0x; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] CL 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [CL/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [CL/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.4 < 2.0; 15m volume 0.3x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 10/20 < 15; volume spike 0.4x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 0.4x < 2.0x; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] DOGE 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [DOGE/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [DOGE/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.0 < 2.0; 15m volume 0.3x < 2.0x; squeeze_5m: quiet bars 10/20 < 15; volume spike 0.6x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 0.6x < 2.0x; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] ETH 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [ETH/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [ETH/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.0 < 2.0; 15m volume 0.7x < 2.0x; squeeze_5m: volume spike 2.3x < 3.0x; not first spike: prior spikes=1; alt_rotation: alt rotation mode inactive; breadth 2 < 5; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] ORCA 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [ORCA/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [ORCA/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 1.0 < 2.0; 15m volume 0.1x < 2.0x; 15m hammer candle is not bullish; squeeze_5m: quiet bars 11/20 < 15; volume spike 0.3x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 0.3x < 2.0x; candle return 0.1% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] SOL 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [SOL/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [SOL/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.1 < 2.0; 15m volume 0.8x < 2.0x; squeeze_5m: quiet bars 10/20 < 15; alt_rotation: alt rotation mode inactive; breadth 2 < 5; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] XAG 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [XAG/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [XAG/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.1 < 2.0; 15m volume 0.2x < 2.0x; squeeze_5m: quiet bars 13/20 < 15; volume spike 0.6x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 0.6x < 2.0x; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] XAU 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [XAU/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [XAU/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.0 < 2.0; 15m volume 0.3x < 2.0x; squeeze_5m: quiet bars 13/20 < 15; volume spike 1.2x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 1.2x < 2.0x; candle return 0.0% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] XRP 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [XRP/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [XRP/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.0 < 2.0; 15m volume 0.6x < 2.0x; squeeze_5m: quiet bars 11/20 < 15; volume spike 2.9x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; candle return 0.2% < 1.0%
+2026-04-29 02:38:22 [INFO] data_fetcher         [REPLAY] ZKJ 15m 누락 캔들 재생 — WS 연결 500초 전 닫힘
+2026-04-29 02:38:22 [INFO] main                 [ZKJ/USDT:USDT] 15m 캔들 닫힘 감지 → 신호 판단 시작
+2026-04-29 02:38:22 [INFO] main                 [ZKJ/USDT:USDT] ENTRY_ENGINE HOLD trigger=- confidence=0 legacy=OFF reason=hammer_15m: lower wick/body 0.5 < 2.0; 15m volume 0.3x < 2.0x; squeeze_5m: quiet bars 14/20 < 15; volume spike 0.6x < 3.0x; alt_rotation: alt rotation mode inactive; breadth 2 < 5; volume spike 0.6x < 2.0x; candle return 0.3% < 1.0%
+2026-04-29 02:38:25 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:38:25 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:38:25 [WARNING] main                 초기 스캔에서 후보 코인 없음 — 관심 심볼 전체로 시작
+2026-04-29 02:38:25 [INFO] data_fetcher         DataFetcher 종료 중...
+2026-04-29 02:38:25 [WARNING] data_fetcher         WebSocket 닫힘 (code=None, msg=None)
+2026-04-29 02:38:25 [INFO] data_fetcher         DataFetcher 종료 완료
+2026-04-29 02:38:25 [INFO] data_fetcher         DataFetcher 시작
+2026-04-29 02:38:25 [INFO] data_fetcher         초기 OHLCV 데이터 REST 로드 중...
+2026-04-29 02:38:30 [INFO] data_fetcher         초기 데이터 로드 완료
+2026-04-29 02:38:30 [INFO] data_fetcher         WebSocket 연결: wss://fstream.binance.com/stream?streams=solusdt@kline_15m/solusdt@kline_1h/solu...
+2026-04-29 02:38:30 [INFO] data_fetcher         WebSocket 스레드 시작 완료
+2026-04-29 02:38:30 [INFO] orderbook            OrderBookManager 종료
+2026-04-29 02:38:30 [WARNING] orderbook            호가창 WebSocket 닫힘 (code=None)
+2026-04-29 02:38:30 [INFO] orderbook            OrderBookManager 시작
+2026-04-29 02:38:30 [INFO] orderbook            호가창 WebSocket 연결: wss://fstream.binance.com/stream?streams=solusdt@depth20@100ms/ethusdt@depth20@1...
+2026-04-29 02:38:30 [INFO] main                 피드 시작: 10개 심볼  ['15m', '1h', '5m']
+2026-04-29 02:38:30 [INFO] main                 스케줄러 시작 완료
+2026-04-29 02:38:30 [INFO] main                 봇 정상 가동 중... (Ctrl+C 로 종료)
+2026-04-29 02:38:30 [INFO] data_fetcher         WebSocket 연결 성공
+2026-04-29 02:38:30 [INFO] data_fetcher         캔들 감시 시작: 심볼 10개  타임프레임=['15m', '1h', '5m']  스트림=30개  예시=['SOL', 'ETH', 'DOGE', 'XRP', 'CL']
+2026-04-29 02:38:30 [INFO] orderbook            호가창 WebSocket 연결 성공
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] SOL 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] ETH 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] DOGE 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] XRP 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] CL 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] ZKJ 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:32 [INFO] data_fetcher         [REPLAY] XAU 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:33 [INFO] data_fetcher         [REPLAY] ORCA 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:33 [INFO] data_fetcher         [REPLAY] XAG 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:38:33 [INFO] data_fetcher         [REPLAY] BTC 15m 누락 캔들 재생 — WS 연결 511초 전 닫힘
+2026-04-29 02:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 02:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 02:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 02:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 02:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 02:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 02:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 03:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 03:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:08:48 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 03:08:48 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 03:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 03:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 03:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:38:06 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 03:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 03:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:38:48 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 03:38:48 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 03:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 03:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 03:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 03:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 03:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 03:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 03:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 04:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 04:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:08:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 04:08:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 04:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 04:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 04:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:38:06 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 04:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 04:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:38:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 04:38:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 04:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 04:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 04:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 04:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 04:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 04:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 04:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 05:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 05:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:08:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 05:08:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 05:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 05:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 05:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 05:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:38:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 05:38:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 05:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 05:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 05:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 05:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 05:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 05:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 05:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 06:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 06:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:08:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 06:08:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 06:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 06:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 06:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:38:06 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 06:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 06:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:38:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 06:38:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 06:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 06:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 06:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 06:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 06:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 06:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 06:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 07:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 07:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:08:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 07:08:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 07:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 07:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 07:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 07:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:38:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 07:38:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 07:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 07:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 07:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 07:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 07:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 07:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 07:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 08:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 08:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:08:46 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 08:08:46 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 08:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:13:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:13:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:13:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:13:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:15:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:15:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 08:18:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:18:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:18:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:18:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:20:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:23:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:23:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:23:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:23:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:25:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:28:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:28:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:28:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:28:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:30:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:30:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 08:33:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:33:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:33:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:33:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:35:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:38:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:38:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 08:38:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:38:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:38:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:38:47 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 08:38:47 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 08:40:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:43:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:43:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:43:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:43:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:45:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:45:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 08:48:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:48:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:48:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:48:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:50:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:53:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:53:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:53:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:53:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 08:55:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 08:58:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 08:58:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 08:58:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 08:58:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 09:00:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 09:00:10 [INFO] main                 15m candle poll skipped: no scan candidates
+2026-04-29 09:01:00 [INFO] coin_scanner         === 관심 심볼 갱신 시작 (A군+B군) ===
+2026-04-29 09:01:00 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 09:01:15 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 09:01:15 [INFO] coin_scanner         === 관심 심볼 갱신 완료: 10개 (A군=10 B군=0) ===
+2026-04-29 09:01:15 [INFO] coin_scanner           A군: ['BTC', 'ETH', 'XAU', 'XAG', 'CL', 'SOL', 'ZKJ', 'DOGE', 'ORCA', 'XRP']
+2026-04-29 09:01:15 [INFO] coin_scanner           B군: []
+2026-04-29 09:01:15 [INFO] main                 관심 심볼 갱신 완료: 10개 (변경 없음 — 피드 유지)
+2026-04-29 09:01:25 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 09:03:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 09:03:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 09:03:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 09:03:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 09:05:00 [INFO] main                 일별 리포트 전송 완료  2026-04-28  PnL=+0.00U  승률=0.0%
+2026-04-29 09:05:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0
+2026-04-29 09:05:10 [WARNING] telegram_notifier    텔레그램 타임아웃 (attempt=1)
+2026-04-29 09:08:30 [INFO] main                 정기 스캔 시작...
+2026-04-29 09:08:30 [INFO] coin_scanner         전체 티커 조회 중...
+2026-04-29 09:08:30 [INFO] coin_scanner         === 코인 스캔 시작 (관심 심볼 10개 대상) ===
+2026-04-29 09:08:36 [INFO] coin_scanner         === 스캔 완료: 최종 후보 0개 ===
+2026-04-29 09:08:36 [INFO] main                 스캔 완료: 0개 후보
+2026-04-29 09:08:47 [INFO] coin_scanner         B군 선정: 0개 (조건 충족 종목 없음)
+2026-04-29 09:08:47 [INFO] main                 B군 갱신 완료: watchlist=10개 (변경 없음 — 피드 유지)
+2026-04-29 09:10:05 [INFO] main                 ENTRY_ENGINE_5M scan done: checked=10 triggered=0

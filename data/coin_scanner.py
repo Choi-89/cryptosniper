@@ -6,8 +6,7 @@ Binance Futures 전체 종목을 스캔하여 진입 후보 코인 리스트를 
 동작 방식:
   1. 자정마다 1회: 거래대금 상위 WATCHLIST_SIZE(30)개 고정 관심 심볼 선정
   2. 5분마다: 고정 심볼 30개 OHLCV 조회 → 지표 계산 → 후보 반환
-  3. 1분마다: 전체 티커 1회 호출 → 거래량 급증 종목 감지 → watchlist 임시 추가
-     (RAVE 같은 수직 급등 종목 조기 포착용)
+  3. B군: 전체 알트 5m OHLCV 기준 침묵 후 첫 스파이크 종목 선정
 """
 
 import time
@@ -51,11 +50,18 @@ REQUEST_DELAY      = 0.5
 WATCHLIST_SIZE     = 30
 
 # ── A군 / B군 분리 watchlist 상수 ──────────────────────────────────────────────
-WATCHLIST_A_SIZE        = 15     # A군: 유동성 안정 종목 수
-WATCHLIST_B_SIZE        = 15     # B군: 지금 움직이는 종목 수
+WATCHLIST_A_SIZE        = 10     # A군: 유동성 안정 종목 수
+WATCHLIST_B_SIZE        = 20     # B군: 지금 움직이는 종목 수
 WATCHLIST_B_MIN_QUOTE   = 5_000_000   # B군 최소 거래대금 ($500만, 저유동성 차단)
 WATCHLIST_B_REFRESH_MIN = 30     # B군 갱신 주기 (분) — 급등 종목 조기 포착
 WATCHLIST_B_VOLUME_LOOKBACK = 24 # B군 판단 기준: 최근 N시간 대비 현재 1시간 배수
+WATCHLIST_B_5M_TIMEFRAME = "5m"
+WATCHLIST_B_5M_LIMIT = 30
+WATCHLIST_B_SILENCE_LOOKBACK = 20
+WATCHLIST_B_MIN_SILENT_BARS = 15
+WATCHLIST_B_SPIKE_RATIO = 3.0
+WATCHLIST_B_MAX_RISE_PCT = 15.0
+WATCHLIST_B_REQUEST_DELAY = 0.03
 
 # ── watchlist 혼합 점수 가중치 ────────────────────────────────────────────────
 # DB 분석 결과: 24시간 거래대금 단일 기준 → BTC/ETH/XRP 등 메이저 코인 위주
@@ -65,11 +71,6 @@ WATCHLIST_VOLUME_WEIGHT    = 0.5   # 24시간 거래대금 가중치
 WATCHLIST_MOMENTUM_WEIGHT  = 0.5   # 거래량 증가율 가중치
 WATCHLIST_MIN_MOMENTUM     = 1.0   # 최소 거래량 증가율 (1.0 = 평균 이상)
 WATCHLIST_MAX_MOMENTUM     = 10.0  # 이상치 방지용 증가율 상한
-SURGE_VOLUME_MULTIPLIER = 3.0    # 직전 평균 대비 몇 배 이상이면 급증으로 판단 (5.0→3.0 완화)
-SURGE_MIN_QUOTE_VOLUME  = 500_000  # 급증 감지 최소 거래대금 ($50만, 너무 소형 제외)
-SURGE_WATCHLIST_MINUTES = 60     # 급증 감지 종목을 watchlist에 유지할 시간 (분)
-SURGE_MAX_SYMBOLS       = 5      # 급증 감지로 추가할 최대 심볼 수
-
 
 class CoinScanner:
 
@@ -97,14 +98,6 @@ class CoinScanner:
         self._watchlist: list[str] = []
         self._watchlist_date: Optional[date] = None
 
-        # 거래량 급증 감지: {symbol: 추가된 datetime}
-        self._surge_symbols: dict[str, datetime] = {}
-
-        # 티커 히스토리: 급증 판단을 위한 직전 값 저장
-        # {symbol: [quoteVolume, quoteVolume, ...]}  최근 N개 유지
-        self._ticker_history: dict[str, list[float]] = {}
-        self._ticker_history_size = 20   # 20회 평균으로 판단
-
         # A군/B군 분리 관리
         self._watchlist_a: list[str] = []   # 유동성 안정 종목 (자정 갱신)
         self._watchlist_b: list[str] = []   # 지금 움직이는 종목 (1시간 갱신)
@@ -116,8 +109,8 @@ class CoinScanner:
         """
         A군 + B군 혼합 watchlist 갱신.
 
-        A군 (WATCHLIST_A_SIZE=15개): 24시간 거래대금 상위 — 유동성 안정
-        B군 (WATCHLIST_B_SIZE=15개): 최근 1시간 거래량 증가율 상위 — 지금 움직이는 종목
+        A군 (WATCHLIST_A_SIZE=10개): 24시간 거래대금 상위 — 유동성 안정
+        B군 (WATCHLIST_B_SIZE=20개): 5m 침묵 후 첫 거래량 스파이크 — 지금 움직이는 알트
 
         호출 주기:
           - A군: 자정 1회 (main.py CronTrigger)
@@ -183,19 +176,11 @@ class CoinScanner:
             logger.info("관심 심볼 없음 — refresh_watchlist() 자동 실행")
             self.refresh_watchlist()
 
-        # 만료된 급증 심볼 정리
-        self._cleanup_surge_symbols()
-
-        # 급증 심볼을 watchlist에 임시 합산
         all_symbols = list(self._watchlist)
-        for sym in self._surge_symbols:
-            if sym not in all_symbols:
-                all_symbols.append(sym)
 
         logger.info(
             f"=== 코인 스캔 시작 "
-            f"(관심 심볼 {len(self._watchlist)}개 "
-            f"+ 급증 감지 {len(self._surge_symbols)}개 대상) ==="
+            f"(관심 심볼 {len(self._watchlist)}개 대상) ==="
         )
 
         candidates = []
@@ -205,9 +190,6 @@ class CoinScanner:
             try:
                 result = self._analyze_symbol(symbol)
                 if result:
-                    # 급증 감지로 추가된 종목이면 표시
-                    if symbol in self._surge_symbols:
-                        result["surge_detected"] = True
                     candidates.append(result)
                 consecutive_429 = 0
                 time.sleep(REQUEST_DELAY)
@@ -232,120 +214,18 @@ class CoinScanner:
 
         logger.info(f"=== 스캔 완료: 최종 후보 {len(top)}개 ===")
         for c in top:
-            surge_tag = " ★급증감지" if c.get("surge_detected") else ""
             logger.info(
                 f"  {c['symbol']:20s} | score={c['score']:.1f} | "
                 f"ADX={c['adx']:.1f} | ATR%={c['atr_ratio']*100:.2f}% | "
-                f"VolRatio={c['volume_ratio']:.1f}x{surge_tag}"
+                f"VolRatio={c['volume_ratio']:.1f}x"
             )
         return top
-
-    def detect_volume_surge(self) -> list[str]:
-        """
-        전체 티커를 1회 조회하여 거래량이 급증한 종목을 감지.
-
-        동작 방식:
-          - B군 선정과 동일한 방식: 현재 1시간 거래량 / 24시간 평균 1시간 거래량
-            recent_ratio = (baseVolume × last_price) / (quoteVolume / 24)
-            → quoteVolume 증가 속도 방식은 자정 이후 시간 누적 효과로 오탐 폭발
-            → 이 방식은 "지금 이 1시간에 얼마나 많이 거래됐나"를 직접 측정
-          - recent_ratio >= SURGE_VOLUME_MULTIPLIER(3.0x) 이상이면 급증
-          - 이미 surge_symbols에 있거나 watchlist 종목은 스킵 (중복 감지 방지)
-
-        Returns
-        -------
-        list[str] : 새로 감지된 급증 심볼 목록
-        """
-        try:
-            tickers = self.exchange.fetch_tickers()
-        except Exception as e:
-            logger.warning(f"거래량 급증 감지 — 티커 조회 실패: {e}")
-            return []
-
-        newly_detected = []
-
-        for symbol, ticker in tickers.items():
-            if not symbol.endswith("/USDT:USDT"):
-                continue
-            base = symbol.split("/")[0]
-            if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
-                continue
-            if not base.isascii():
-                continue
-
-            # 최소 24시간 거래대금 필터
-            quote_vol  = float(ticker.get("quoteVolume") or 0)
-            if quote_vol < SURGE_MIN_QUOTE_VOLUME:
-                continue
-
-            # 현재 1시간 거래량(USDT) 추정
-            # baseVolume × 현재가 ≈ 지금 이 캔들의 거래대금
-            base_vol   = float(ticker.get("baseVolume") or 0)
-            last_price = float(ticker.get("last") or ticker.get("close") or 0)
-            if base_vol <= 0 or last_price <= 0:
-                continue
-
-            current_1h_usdt = base_vol * last_price
-
-            # 24시간 평균 1시간 거래대금
-            avg_1h_usdt = quote_vol / 24.0
-            if avg_1h_usdt <= 0:
-                continue
-
-            # 현재 1시간이 평균 대비 몇 배인지
-            recent_ratio = current_1h_usdt / avg_1h_usdt
-
-            # 급증 감지
-            if recent_ratio >= SURGE_VOLUME_MULTIPLIER:
-                # 이미 감지된 종목 스킵
-                if symbol in self._surge_symbols:
-                    continue
-                # 이미 watchlist에 있는 종목 스킵 (구독 중)
-                if symbol in self._watchlist:
-                    continue
-                if len(self._surge_symbols) >= SURGE_MAX_SYMBOLS:
-                    continue
-
-                self._surge_symbols[symbol] = datetime.now()
-                newly_detected.append(symbol)
-                logger.info(
-                    f"[거래량 급증 감지] {symbol}  "
-                    f"현재1H={current_1h_usdt/1e6:.1f}M  "
-                    f"평균1H={avg_1h_usdt/1e6:.1f}M  "
-                    f"배수={recent_ratio:.1f}x  "
-                    f"24H거래대금={quote_vol/1e6:.0f}M"
-                )
-
-        if newly_detected:
-            logger.info(
-                f"거래량 급증 감지 완료: {len(newly_detected)}개  "
-                f"({[s.split('/')[0] for s in newly_detected]})"
-            )
-
-        return newly_detected
 
     def get_watchlist(self) -> list[str]:
         return list(self._watchlist)
 
     def get_watchlist_date(self) -> Optional[date]:
         return self._watchlist_date
-
-    def get_surge_symbols(self) -> dict:
-        """현재 급증 감지로 추가된 심볼과 추가 시각 반환."""
-        return dict(self._surge_symbols)
-
-    # ── 내부 메서드 ────────────────────────────────────────────────────────────
-
-    def _cleanup_surge_symbols(self) -> None:
-        """SURGE_WATCHLIST_MINUTES 이상 경과한 급증 심볼 제거."""
-        now = datetime.now()
-        expired = [
-            sym for sym, added_at in self._surge_symbols.items()
-            if (now - added_at).total_seconds() > SURGE_WATCHLIST_MINUTES * 60
-        ]
-        for sym in expired:
-            del self._surge_symbols[sym]
-            logger.info(f"[급증 감지] {sym} watchlist 임시 제거 (유지 시간 만료)")
 
     def _load_markets(self) -> None:
         logger.info("마켓 정보 로드 중...")
@@ -385,68 +265,96 @@ class CoinScanner:
 
     def _select_group_b(self, tickers: dict, exclude: set = None) -> list[str]:
         """
-        B군 선정 — 지금 이 시간에 유독 많이 거래되는 종목 WATCHLIST_B_SIZE개.
+        B군 선정 — 전체 알트의 5m 거래량 침묵 후 첫 스파이크 종목.
 
-        선정 기준:
-          recent_ratio = baseVolume(현재) / (quoteVolume / 24)
-          = 현재 1시간 거래량 / 24시간 평균 1시간 거래량
-          이 값이 높을수록 "지금 막 터지는 중"인 종목
-
-        MIN_QUOTE_VOLUME보다 낮아도 WATCHLIST_B_MIN_QUOTE 이상이면 포함
-        → NEIRO처럼 아직 24시간 거래대금은 낮지만 지금 폭발하는 종목 포착
+        티커 누적 거래대금의 호출 간 변화량은 시작 직후 히스토리가 없어
+        B군이 0개가 되기 쉽다. 그래서 B군은 5m OHLCV를 직접 확인해
+        entry_engine이 원하는 "침묵 → 첫 거래량 변화" 후보만 올린다.
         """
         if exclude is None:
             exclude = set()
 
-        scored = []
+        candidates = []
         for symbol, ticker in tickers.items():
             if not symbol.endswith("/USDT:USDT"):
                 continue
             if symbol in exclude:
                 continue
             base = symbol.split("/")[0]
-            if base in ("BUSD", "USDC", "TUSD", "DAI", "USDP"):
+            if base in ("BTC", "ETH", "BUSD", "USDC", "TUSD", "DAI", "USDP"):
                 continue
             if not base.isascii():
                 continue
             market = self._markets.get(symbol, {})
             if not market.get("active", True):
                 continue
-
             quote_vol = float(ticker.get("quoteVolume") or 0)
-            base_vol  = float(ticker.get("baseVolume") or 0)
-            last_price = float(ticker.get("last") or ticker.get("close") or 0)
-
-            # B군 최소 거래대금 필터 (A군보다 낮음 — 저유동성만 차단)
             if quote_vol < WATCHLIST_B_MIN_QUOTE:
                 continue
-            if base_vol <= 0 or last_price <= 0:
+            candidates.append((symbol, quote_vol))
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        scored = []
+        for symbol, quote_vol in candidates:
+            try:
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol,
+                    WATCHLIST_B_5M_TIMEFRAME,
+                    limit=WATCHLIST_B_5M_LIMIT,
+                )
+                time.sleep(WATCHLIST_B_REQUEST_DELAY)
+            except Exception as e:
+                logger.debug(f"[{symbol}] B군 5m OHLCV 조회 실패: {e}")
                 continue
 
-            # 현재 1시간 거래량(USDT) 추정
-            # baseVolume × 현재가 ≈ 지금 이 캔들의 거래대금
-            current_1h_usdt = base_vol * last_price
-
-            # 24시간 평균 1시간 거래대금
-            avg_1h_usdt = quote_vol / WATCHLIST_B_VOLUME_LOOKBACK
-            if avg_1h_usdt <= 0:
+            if len(ohlcv) < WATCHLIST_B_SILENCE_LOOKBACK + 1:
                 continue
 
-            # 현재 1시간이 평균 대비 몇 배인지
-            recent_ratio = current_1h_usdt / avg_1h_usdt
+            df = self._ohlcv_to_df(ohlcv)
+            current = df.iloc[-1]
+            quiet = df.iloc[-(WATCHLIST_B_SILENCE_LOOKBACK + 1):-1]
 
-            # 최소 1.5배 이상인 종목만 (평균보다 50% 이상 많이 거래 중)
-            if recent_ratio < 1.5:
+            quiet_avg = float(quiet["volume"].mean())
+            if quiet_avg <= 0:
                 continue
 
-            scored.append((symbol, recent_ratio, quote_vol))
+            current_vol = float(current["volume"])
+            spike_ratio = current_vol / quiet_avg
+            silent_bars = int((quiet["volume"] <= quiet_avg).sum())
+            prior_spikes = int((quiet["volume"] >= quiet_avg * WATCHLIST_B_SPIKE_RATIO).sum())
+            quiet_low = float(quiet["low"].min())
+            close = float(current["close"])
+            open_ = float(current["open"])
+            rise_pct = ((close - quiet_low) / quiet_low * 100.0) if quiet_low > 0 else 999.0
 
-        # recent_ratio 내림차순 정렬
+            if silent_bars < WATCHLIST_B_MIN_SILENT_BARS:
+                continue
+            if spike_ratio < WATCHLIST_B_SPIKE_RATIO:
+                continue
+            if prior_spikes > 0:
+                continue
+            if rise_pct >= WATCHLIST_B_MAX_RISE_PCT:
+                continue
+            if close <= open_:
+                continue
+
+            score = (
+                spike_ratio * 10
+                + silent_bars
+                + min(20.0, quote_vol / 1_000_000)
+                - rise_pct
+            )
+            scored.append((symbol, score, spike_ratio, silent_bars, rise_pct, quote_vol))
+
         scored.sort(key=lambda x: x[1], reverse=True)
 
         result = [s[0] for s in scored[:WATCHLIST_B_SIZE]]
         if result:
-            top3 = [(s[0].split('/')[0], f"{s[1]:.1f}x") for s in scored[:3]]
+            top3 = [
+                (s[0].split('/')[0], f"spike={s[2]:.1f}x", f"silent={s[3]}/20")
+                for s in scored[:3]
+            ]
             logger.info(f"B군 선정: {len(result)}개  상위3={top3}")
         else:
             logger.info("B군 선정: 0개 (조건 충족 종목 없음)")
@@ -580,7 +488,6 @@ class CoinScanner:
             "atr_ratio":     round(atr_ratio, 5),
             "volume_ratio":  round(volume_ratio, 2),
             "current_price": round(current_price, 6),
-            "surge_detected": False,
         }
 
     def _calculate_score(self, adx, atr_ratio, volume_ratio) -> float:

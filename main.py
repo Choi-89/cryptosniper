@@ -7,16 +7,16 @@ CryptoSniper Bot 진입점.
   1. 설정 로드 (config.py)
   2. 로깅 초기화
   3. 모듈 인스턴스 생성 및 의존성 주입
-  4. CoinScanner 로 초기 후보 코인 선정
+  4. CoinScanner 로 A군/B군 watchlist 선정
   5. DataFetcher WebSocket 구독 시작
-  6. 매 캔들 닫힘 → on_candle_close() 콜백
-       └─ CircuitBreaker 차단 확인
-       └─ signal_engine → signal_scorer → leverage_manager
+  6. 매 5분봉 종료 직후 entry_engine 조기 진입 판단
+       └─ CircuitBreaker / 쿨다운 / 포지션 상태 확인
+       └─ entry_engine → ScoreResult 어댑터 → leverage_manager
        └─ risk_manager.calculate_plan_for()
        └─ orderbook 유동성 최종 점검
        └─ order_executor.execute_entry()
-  7. 매 5분 주기 → run_scan_cycle()
-       └─ CoinScanner 재스캔 → 구독 심볼 업데이트
+  7. 매 5분 주기 → scan_candidates 갱신
+       └─ CoinScanner 재스캔 → 진입 허용 후보 업데이트
   8. APScheduler 로 스케줄 관리
   9. 일별 리포트 자정 자동 전송
  10. KeyboardInterrupt / SIGTERM 시 정상 종료
@@ -50,13 +50,14 @@ from data_fetcher        import DataFetcher
 from orderbook           import OrderBookManager
 import signal_engine
 import signal_scorer
+import entry_engine
 from risk_manager        import RiskManager
 from leverage_manager    import LeverageManager
 from circuit_breaker     import CircuitBreaker
 from order_executor      import OrderExecutor, OrderResult
 from db_logger           import DbLogger, TradeRecord, SignalRecord
 try:
-    import pandas_ta as pta  # Squeeze/조기청산 RSI·MACD 계산용
+    import pandas_ta as pta  # 조기청산 RSI·MACD 계산용
 except ImportError:
     pta = None
 from telegram_notifier   import TelegramNotifier, NotifyLevel
@@ -193,6 +194,7 @@ class CryptoSniperBot:
         self._feed_restart_guard_before_sec = 120
         self._feed_restart_guard_after_sec = 75
         self._last_closed_candles: set[tuple[str, str, str]] = set()
+        self._last_entry_engine_triggers: set[tuple[str, str]] = set()
 
         # 청산 후 쿨다운 {symbol: close_time}
         # 같은 종목 재진입 시 COOLDOWN_MINUTES 경과 여부 체크
@@ -200,8 +202,7 @@ class CryptoSniperBot:
         self._cooldown_minutes = 60   # 기본 60분 쿨다운
         # 최근 스캔 후보 심볼 집합 — 진입 허가 게이트로만 사용 (피드 재시작 안 함)
         self._scan_candidates: set[str] = set()
-        # Squeeze Breakout 레이어 — 종목별 거래량 침묵 상태 추적
-        # {symbol: {"silence_avg": float, "silence_bars": int, "detected_at": str}}
+        # Deprecated squeeze shadow state. Kept only for old DB analysis helpers.
         self._squeeze_state: dict[str, dict] = {}
 
     def _desired_feed_symbols(self, watchlist: list[str] | None = None) -> list[str]:
@@ -482,7 +483,7 @@ class CryptoSniperBot:
         Step 1. Circuit Breaker 차단 확인
         Step 2. 이미 포지션 있으면 포지션 업데이트 후 스킵
         Step 3. 1H / 15M DataFrame 가져오기
-        Step 4. signal_engine → signal_scorer
+        Step 4. entry_engine → ScoreResult adapter
         Step 5. 신호 기록 (DB)
         Step 6. HOLD 이면 종료
         Step 7. leverage_manager 최종 레버리지 결정
@@ -565,30 +566,43 @@ class CryptoSniperBot:
         df_15m = self.fetcher.get_df(symbol, cfg.strategy.entry_timeframe)
         df_5m  = self.fetcher.get_df(symbol, cfg.strategy.confirm_timeframe)
 
-        if df_1h is None or df_15m is None:
+        if df_15m is None or df_5m is None:
             logger.debug(f"[{symbol}] 데이터 미준비 — 스킵")
             return
-        if len(df_1h) < 205 or len(df_15m) < 50:
+        if len(df_15m) < 30 or len(df_5m) < 30:
             logger.debug(f"[{symbol}] 캔들 수 부족 — 스킵")
             return
 
-        # BTC 1H 데이터 수집 (알트코인 시장 필터용)
-        btc_df_1h = None
+        # BTC 5m 데이터 수집 (entry_engine 급락 필터용)
+        btc_df_5m = None
         if "BTC" not in symbol:
-            btc_df_1h = self.fetcher.get_df("BTC/USDT:USDT", cfg.strategy.trend_timeframe)
+            btc_df_5m = self.fetcher.get_df("BTC/USDT:USDT", cfg.strategy.confirm_timeframe)
 
         # ── Step 4. 신호 판단 ─────────────────────────────────────────────
-        sig = signal_engine.check(
+        legacy_sig = signal_engine.SignalResult()
+        legacy_sig.reject_reason = "signal_engine disabled"
+
+        entry_decision = entry_engine.check(
             symbol,
-            df_1h,
-            df_15m,
-            btc_df_1h=btc_df_1h,
-            df_5m=df_5m if (df_5m is not None and len(df_5m) >= 30) else None,
-            min_score_to_enter=cfg.strategy.min_score_to_enter,
+            df_5m,
+            df_15m=df_15m,
+            btc_df=btc_df_5m,
+            stage1_meta={
+                "alt_rotation": self._detect_alt_rotation_mode(
+                    list(self._subscribed_symbols),
+                    cfg.strategy.confirm_timeframe,
+                )
+            },
         )
-        score = signal_scorer.evaluate(
-            sig,
-            min_confidence=cfg.strategy.min_confidence,
+        sig = self._build_entry_engine_signal(symbol, entry_decision, legacy_sig, df_15m)
+        score = self._build_entry_engine_score(entry_decision, sig)
+
+        logger.info(
+            f"[{symbol}] ENTRY_ENGINE {entry_decision.signal} "
+            f"trigger={entry_decision.metrics.get('trigger', '-')} "
+            f"confidence={score.confidence} "
+            f"legacy=OFF "
+            f"reason={entry_decision.reject_reason or '-'}"
         )
 
         # ── Step 5. 신호 DB 기록 ──────────────────────────────────────────
@@ -686,46 +700,100 @@ class CryptoSniperBot:
 
     # ── 스캔 사이클 ───────────────────────────────────────────────────────────
 
-    def _surge_scan_loop(self) -> None:
-        """
-        1분마다 실행 — 거래량 급증 종목 감지 후 즉시 스캔 트리거.
+    def _build_entry_engine_signal(self, symbol: str, decision, legacy_sig, df_15m: pd.DataFrame):
+        """Convert entry_engine output into the existing SignalResult contract."""
+        from types import SimpleNamespace
 
-        기존 정기 스캔(5분)과 별개로 급증 감지 시 즉시 해당 종목의
-        신호를 체크하여 급등 초입 포착 타이밍을 앞당김.
+        trigger = decision.metrics.get("trigger", "")
+        signal = "LONG" if decision.should_enter else "HOLD"
+        reject_reason = decision.reject_reason
+        if decision.should_enter:
+            reject_reason = f"entry_engine:{trigger}; legacy={legacy_sig.signal}/{legacy_sig.score}"
 
-        흐름:
-          detect_volume_surge() → 새로 감지된 종목 필터링
-          → _start_feeds()에 추가 (WebSocket 구독)
-          → 각 종목 즉시 _process_signal() 호출
-        """
-        try:
-            new_surges = self.scanner.detect_volume_surge()
-            if not new_surges:
-                return
+        trend = getattr(legacy_sig, "trend", None)
+        if trend is None:
+            atr = self._entry_engine_atr(df_15m)
+            atr_ratio = (atr / decision.entry_price) if decision.entry_price > 0 else 0.0
+            trend = SimpleNamespace(
+                trend_direction="ENTRY_ENGINE",
+                adx=0.0,
+                atr=atr,
+                atr_ratio=atr_ratio,
+            )
 
-            # 이미 watchlist에 있는 종목 제외 (새로 감지된 것만)
-            current = set(self.scanner.get_watchlist())
-            truly_new = [s for s in new_surges if s not in current]
-            if not truly_new:
-                return
+        return signal_engine.SignalResult(
+            signal=signal,
+            score=decision.score,
+            reject_reason=reject_reason,
+            passed_required=decision.should_enter,
+            bonus_details=decision.metrics,
+            trend=trend,
+            momentum=getattr(legacy_sig, "momentum", None),
+            volume=getattr(legacy_sig, "volume", None),
+            entry_price=decision.entry_price,
+            btc_weak=False,
+        )
 
-            logger.info(f"⚡ 급증 감지 → 즉시 스캔: {[s.split('/')[0] for s in truly_new]}")
+    def _build_entry_engine_score(self, decision, sig):
+        """Use entry_engine score as confidence while keeping ScoreResult shape."""
+        confidence = int(max(0, min(100, decision.score if decision.should_enter else 0)))
+        can_enter = decision.should_enter and confidence >= self.cfg.strategy.min_confidence
+        leverage = self._entry_engine_leverage(confidence) if can_enter else 1
+        return signal_scorer.ScoreResult(
+            confidence=confidence,
+            grade=self._entry_engine_grade(confidence),
+            leverage=leverage,
+            can_enter=can_enter,
+            base_score=decision.score,
+            context_score=0,
+            penalty_score=0,
+            raw_total=confidence,
+            context_details={"entry_engine": decision.metrics.get("trigger", "")},
+            penalty_details={},
+            signal_result=sig,
+        )
 
-            # 피드 구독 추가
-            all_symbols = list(set(self.scanner.get_watchlist()) |
-                               set(new_surges) |
-                               {pos.symbol for pos in self.rm.get_all_positions()})
-            self._request_feed_restart(all_symbols, "surge_scan")
+    def _entry_engine_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Fallback ATR for entry_engine signals when legacy trend is unavailable."""
+        if df is None or len(df) < period + 1:
+            return 0.0
+        recent = df.tail(period + 1)
+        prev_close = recent["close"].shift(1)
+        true_range = pd.concat(
+            [
+                recent["high"] - recent["low"],
+                (recent["high"] - prev_close).abs(),
+                (recent["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        return float(true_range.iloc[1:].mean())
 
-            # 즉시 신호 체크 (캔들 닫힘 기다리지 않고 현재 데이터로)
-            for symbol in truly_new:
-                try:
-                    self._process_signal(symbol)
-                except Exception as e:
-                    logger.debug(f"[{symbol}] 급증 즉시 스캔 오류: {e}")
+    def _entry_engine_grade(self, confidence: int) -> str:
+        if confidence >= 85:
+            return "S"
+        if confidence >= 75:
+            return "A"
+        if confidence >= 65:
+            return "B"
+        if confidence >= 55:
+            return "C"
+        if confidence >= 40:
+            return "D"
+        return "F"
 
-        except Exception as e:
-            logger.error(f"급증 스캔 루프 오류: {e}", exc_info=True)
+    def _entry_engine_leverage(self, confidence: int) -> int:
+        if confidence >= 85:
+            return 10
+        if confidence >= 75:
+            return 7
+        if confidence >= 65:
+            return 5
+        if confidence >= 55:
+            return 3
+        if confidence >= 40:
+            return 2
+        return 1
 
     def _refresh_watchlist_b(self) -> None:
         """B군 watchlist 30분마다 갱신 — 신규 심볼 있을 때만 feed 재시작.
@@ -961,6 +1029,158 @@ class CryptoSniperBot:
         except Exception as e:
             logger.error(f"코인 스캔 오류: {e}", exc_info=True)
             return []
+
+    def _entry_engine_5m_scan(self) -> None:
+        """Run leading entry checks on cached 5m WebSocket data only."""
+        if self.fetcher is None:
+            return
+
+        with self._symbols_lock:
+            symbols = list(self._subscribed_symbols)
+        if not symbols:
+            return
+
+        tf_5m = self.cfg.strategy.confirm_timeframe
+        tf_15m = self.cfg.strategy.entry_timeframe
+        btc_df_5m = self.fetcher.get_df("BTC/USDT:USDT", tf_5m)
+        alt_rotation_meta = self._detect_alt_rotation_mode(symbols, tf_5m)
+        if alt_rotation_meta["active"]:
+            logger.info(
+                "ALT_ROTATION_MODE active: "
+                f"breadth={alt_rotation_meta['breadth']} "
+                f"spikes={alt_rotation_meta['spike_count']} "
+                f"gainers={alt_rotation_meta['gainer_count']}"
+            )
+
+        checked = 0
+        triggered = 0
+        for symbol in symbols:
+            if self.rm.get_position(symbol):
+                continue
+
+            try:
+                df_5m = self.fetcher.get_df(symbol, tf_5m)
+                if df_5m is None or len(df_5m) < 30:
+                    continue
+
+                candle_ts = str(df_5m.index[-1])
+                trigger_key = (symbol, candle_ts)
+                if trigger_key in self._last_entry_engine_triggers:
+                    continue
+
+                df_15m = self.fetcher.get_df(symbol, tf_15m)
+                decision = entry_engine.check(
+                    symbol,
+                    df_5m,
+                    df_15m=df_15m,
+                    btc_df=None if "BTC" in symbol else btc_df_5m,
+                    stage1_meta={"alt_rotation": alt_rotation_meta},
+                )
+                checked += 1
+
+                if not decision.should_enter:
+                    logger.debug(
+                        f"[{symbol}] ENTRY_ENGINE_5M HOLD "
+                        f"reason={decision.reject_reason}"
+                    )
+                    continue
+
+                self._last_entry_engine_triggers.add(trigger_key)
+                if len(self._last_entry_engine_triggers) > 5000:
+                    self._last_entry_engine_triggers = set(
+                        list(self._last_entry_engine_triggers)[-2500:]
+                    )
+
+                logger.info(
+                    f"[{symbol}] ENTRY_ENGINE_5M TRIGGER "
+                    f"trigger={decision.metrics.get('trigger', '-')} "
+                    f"score={decision.score} price={decision.entry_price:.8f}"
+                )
+
+                # Allow the normal pipeline to evaluate and place the order.
+                self._scan_candidates.add(symbol)
+                triggered += 1
+                self._process_signal_guarded(symbol, "entry_engine_5m")
+
+            except Exception as e:
+                logger.debug(f"[{symbol}] ENTRY_ENGINE_5M error: {e}", exc_info=True)
+
+        if checked or triggered:
+            logger.info(
+                f"ENTRY_ENGINE_5M scan done: checked={checked} triggered={triggered}"
+            )
+
+    def _detect_alt_rotation_mode(self, symbols: list[str], timeframe: str) -> dict:
+        """Detect broad alt rotation using only cached DataFetcher 5m data."""
+        excluded = {"BTC", "ETH", "BUSD", "USDC", "TUSD", "DAI", "USDP"}
+        checked = 0
+        spike_count = 0
+        gainer_count = 0
+        leaders = []
+
+        for symbol in symbols:
+            base = symbol.split("/")[0]
+            if base in excluded:
+                continue
+
+            df = self.fetcher.get_df(symbol, timeframe) if self.fetcher else None
+            if df is None or len(df) < 21:
+                continue
+
+            try:
+                recent = df.dropna(subset=["open", "close", "volume"]).tail(21)
+                if len(recent) < 21:
+                    continue
+                current = recent.iloc[-1]
+                prev = recent.iloc[:-1]
+                avg_vol = float(prev["volume"].mean())
+                open_ = float(current["open"])
+                close = float(current["close"])
+                if avg_vol <= 0 or open_ <= 0:
+                    continue
+
+                checked += 1
+                vol_ratio = float(current["volume"]) / avg_vol
+                ret_pct = (close - open_) / open_ * 100.0
+
+                if vol_ratio >= 2.0:
+                    spike_count += 1
+                if ret_pct >= 3.0:
+                    gainer_count += 1
+                if vol_ratio >= 2.0 or ret_pct >= 3.0:
+                    leaders.append((base, round(vol_ratio, 2), round(ret_pct, 2)))
+            except Exception:
+                continue
+
+        breadth = max(spike_count, gainer_count)
+        active = checked >= 8 and (spike_count >= 5 or gainer_count >= 8)
+        leaders.sort(key=lambda item: (item[1], item[2]), reverse=True)
+
+        return {
+            "active": active,
+            "checked": checked,
+            "breadth": breadth,
+            "spike_count": spike_count,
+            "gainer_count": gainer_count,
+            "leaders": leaders[:5],
+        }
+
+    def _process_signal_guarded(self, symbol: str, source: str) -> None:
+        """Run _process_signal with the same duplicate guard used by candle callbacks."""
+        with self._processing_lock:
+            if self._processing.get(symbol):
+                logger.debug(f"[{symbol}] {source} skipped: already processing")
+                return
+            self._processing[symbol] = True
+
+        try:
+            self._process_signal(symbol)
+        except Exception as e:
+            logger.error(f"[{symbol}] {source} signal processing error: {e}", exc_info=True)
+            self.db.save_error(f"main.{source}", str(e), symbol)
+        finally:
+            with self._processing_lock:
+                self._processing[symbol] = False
 
     def _squeeze_scan(self) -> None:
         """
@@ -1469,14 +1689,16 @@ class CryptoSniperBot:
             name    = "코인 스캔",
             misfire_grace_time = 30,
         )
-        # Squeeze Breakout 조기 감지 — 기존 스캔과 동일 주기, Shadow Mode
+        # Entry Engine early scan — cached 5m data, no REST burst.
         self.scheduler.add_job(
-            self._squeeze_scan,
-            trigger = IntervalTrigger(seconds=self.cfg.scanner.scan_interval),
-            id      = "squeeze_scan",
-            name    = "Squeeze Breakout 조기 감지 (Shadow)",
-            misfire_grace_time = 30,
+            self._entry_engine_5m_scan,
+            trigger = CronTrigger(minute="*/5", second=5, timezone="UTC"),
+            id      = "entry_engine_5m_scan",
+            name    = "Entry Engine 5m early scan",
+            misfire_grace_time = 20,
         )
+        # Squeeze Shadow scan disabled.
+        # entry_engine_5m_scan now owns early breakout detection.
 
         # ── 1분마다: 포지션 SL / 트레일링 체크
         self.scheduler.add_job(
@@ -1508,17 +1730,6 @@ class CryptoSniperBot:
             name    = "B군 watchlist 갱신",
             misfire_grace_time = 30,
         )
-
-        # ── 1분마다: 거래량 급증 감지 → 즉시 해당 종목 스캔 트리거
-        # ★ 비활성화 유지: DataFetcher 연속 재시작 유발 문제로 비활성화
-        #   (피드 안정성 > 급증 포착 우선 — 재활성화 시 아래 주석 해제)
-        # self.scheduler.add_job(
-        #     self._surge_scan_loop,
-        #     trigger = IntervalTrigger(seconds=60),
-        #     id      = "surge_scan",
-        #     name    = "급증 감지 스캔",
-        #     misfire_grace_time = 10,
-        # )
 
         # ── 5분마다: 잔고 갱신
         self.scheduler.add_job(
@@ -1729,7 +1940,6 @@ class CryptoSniperBot:
     def _cmd_status(self, args: str) -> None:
         positions = self.rm.get_all_positions()
         watchlist = self.scanner.get_watchlist()
-        surge     = self.scanner.get_surge_symbols()
         cb_status = self.cb.check()
         paused    = getattr(self, "_paused", False)
         status_icon = "⏸ 일시중단" if paused else "🟢 가동 중"
@@ -1760,8 +1970,6 @@ class CryptoSniperBot:
         if pos_lines:
             text += "\n".join(pos_lines) + "\n"
         text += f"감시: {len(watchlist)}개"
-        if surge:
-            text += f" +급증 {len(surge)}개"
 
         buttons = [
             [
@@ -1822,16 +2030,11 @@ class CryptoSniperBot:
 
     def _cmd_watchlist(self, args: str) -> None:
         watchlist = self.scanner.get_watchlist()
-        surge     = self.scanner.get_surge_symbols()
         syms = [s.split("/")[0] for s in watchlist]
         text = f"👁 *감시 중인 종목* ({len(watchlist)}개)\n"
         text += "  " + "  ".join(syms[:15])
         if len(syms) > 15:
             text += "\n  " + "  ".join(syms[15:])
-        if surge:
-            text += f"\n\n⚡ *급증 감지* ({len(surge)}개)\n"
-            for sym, added_at in surge.items():
-                text += f"  {sym.split('/')[0]} ({added_at.strftime('%H:%M')} 추가)\n"
         self.notifier.send_raw(text)
 
     def _cmd_close(self, args: str) -> None:
