@@ -36,15 +36,8 @@ from strategy.signal_scorer import ScoreResult
 logger = logging.getLogger("risk_manager")
 
 
-# ── 파라미터 상수 ──────────────────────────────────────────────────────────────
-RISK_PER_TRADE_PCT   = 0.01    # 1회 트레이드 최대 손실 비율 (총 자본 대비)
-ATR_SL_MULTIPLIER    = 1.5     # SL 거리 = ATR × 1.5
-TP1_RATIO            = 2.0     # TP1 = SL 거리 × 2.0  (Risk:Reward = 1:2)
-TP2_RATIO            = 4.0     # TP2 = SL 거리 × 4.0  (Risk:Reward = 1:4)
-TP1_CLOSE_PCT        = 0.5     # TP1 도달 시 포지션 50% 청산
-TRAILING_TRIGGER_PCT = 0.01    # TP2 이후 고점 대비 -1% 이탈 시 청산
-MAX_POSITIONS        = 3       # 최대 동시 포지션 수
-MIN_POSITION_USDT    = 10.0    # 최소 포지션 크기 (USDT)
+# 파라미터는 config.py RiskConfig 가 단일 진실의 원천.
+# main.py 가 get_config() 로 읽어 RiskManager.__init__() 에 명시적으로 전달한다.
 
 
 # ── 포지션 상태 Enum ───────────────────────────────────────────────────────────
@@ -154,10 +147,10 @@ class RiskManager:
         total_capital: float,
         risk_per_trade_pct: float = 0.01,
         max_positions: int = 3,
-        min_position_usdt: float = 10.0,
+        min_position_usdt: float = 5.0,
         atr_sl_multiplier: float = 1.5,
-        tp1_ratio: float = 2.0,
-        tp2_ratio: float = 4.0,
+        tp1_ratio: float = 1.5,
+        tp2_ratio: float = 3.0,
         tp1_close_pct: float = 0.5,
         trailing_trigger_pct: float = 0.01,
         max_notional_pct: float = 0.30,
@@ -342,12 +335,12 @@ class RiskManager:
         logger.info(
             f"[{plan.symbol}] 포지션 등록  "
             f"dir={plan.direction}  "
-            f"entry={plan.entry_price:.4f}  "
+            f"entry={plan.entry_price:.8f}  "
             f"size={plan.position_size:.6f}  "
             f"lev={plan.leverage}x  "
-            f"SL={plan.sl_price:.4f}  "
-            f"TP1={plan.tp1_price:.4f}  "
-            f"TP2={plan.tp2_price:.4f}"
+            f"SL={plan.sl_price:.8f}  "
+            f"TP1={plan.tp1_price:.8f}  "
+            f"TP2={plan.tp2_price:.8f}"
         )
         return pos
 
@@ -496,16 +489,10 @@ class RiskManager:
             sl_price  = entry_price - sl_distance
             tp1_price = entry_price + tp1_distance
             tp2_price = entry_price + tp2_distance
-            # TP 고정 % 상한선: TP1 최대 +8%, TP2 최대 +15%
-            tp1_price = min(tp1_price, entry_price * 1.08)
-            tp2_price = min(tp2_price, entry_price * 1.15)
         else:  # SHORT
             sl_price  = entry_price + sl_distance
             tp1_price = entry_price - tp1_distance
             tp2_price = entry_price - tp2_distance
-            # TP 고정 % 상한선: TP1 최대 -8%, TP2 최대 -15%
-            tp1_price = max(tp1_price, entry_price * 0.92)
-            tp2_price = max(tp2_price, entry_price * 0.85)
 
         # 포지션 크기 계산
         size     = _calc_position_size(risk_amount, sl_distance, leverage, entry_price)
@@ -547,9 +534,9 @@ class RiskManager:
             position_size = round(size, 6),
             notional      = round(notional, 2),
             leverage      = leverage,
-            sl_price      = round(sl_price,  4),
-            tp1_price     = round(tp1_price, 4),
-            tp2_price     = round(tp2_price, 4),
+            sl_price      = _round_price_level(sl_price),
+            tp1_price     = _round_price_level(tp1_price),
+            tp2_price     = _round_price_level(tp2_price),
             risk_amount   = round(risk_amount, 2),
             atr           = atr,
             confidence    = confidence,
@@ -624,9 +611,9 @@ class RiskManager:
                 # SL을 진입가 + SL거리×0.4 위치로 이동 (약간의 버퍼 사수)
                 sl_dist = abs(pos.entry_price - pos.sl_price)
                 if is_long:
-                    pos.sl_price = round(pos.entry_price + sl_dist * 0.4, 4)
+                    pos.sl_price = _round_price_level(pos.entry_price + sl_dist * 0.4)
                 else:
-                    pos.sl_price = round(pos.entry_price - sl_dist * 0.4, 4)
+                    pos.sl_price = _round_price_level(pos.entry_price - sl_dist * 0.4)
                 logger.info(
                     f"[{pos.symbol}] TP1 50% 익절  price={price:.4f}  "
                     f"SL → {pos.sl_price:.4f} (진입가+SL거리×0.4)"
@@ -752,6 +739,23 @@ def _calc_position_size(
 
     size = (risk_amount * leverage) / (entry_price * sl_pct)
     return max(0.0, size)
+
+
+def _round_price_level(price: float) -> float:
+    """Preserve enough decimals for low-priced futures symbols."""
+    if price <= 0:
+        return 0.0
+    if price < 0.001:
+        digits = 8
+    elif price < 0.01:
+        digits = 7
+    elif price < 0.1:
+        digits = 6
+    elif price < 1:
+        digits = 5
+    else:
+        digits = 4
+    return round(price, digits)
 
 
 def _make_action(

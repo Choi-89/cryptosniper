@@ -29,10 +29,6 @@ MAX_PRICE_RISE_PCT = 15.0
 MAX_ABSORPTION_ATR_MULTIPLIER = 1.8
 BTC_DROP_LOOKBACK = 3
 BTC_DROP_BLOCK_PCT = -2.5
-ALT_ROTATION_MIN_BREADTH = 5
-ALT_ROTATION_MIN_VOLUME_SPIKE = 2.0
-ALT_ROTATION_MAX_RISE_PCT = 35.0
-ALT_ROTATION_MIN_CANDLE_RETURN_PCT = 1.0
 
 
 @dataclass
@@ -53,7 +49,6 @@ def check(
     df_5m: pd.DataFrame,
     df_15m: Optional[pd.DataFrame] = None,
     btc_df: Optional[pd.DataFrame] = None,
-    stage1_meta: Optional[dict] = None,
 ) -> EntryDecision:
     """
     Evaluate a symbol for immediate early LONG entry.
@@ -74,8 +69,6 @@ def check(
         Optional 15m OHLCV dataframe for hammer/Wyckoff absorption detection.
     btc_df:
         Optional BTC dataframe on the same or similar timeframe.
-    stage1_meta:
-        Optional metadata from the scanner's first-stage volume filter.
     """
     decision = EntryDecision()
 
@@ -91,18 +84,11 @@ def check(
 
     squeeze_ok, squeeze_reason, squeeze_metrics = _check_5m_first_spike(df_5m_clean)
     hammer_ok, hammer_reason, hammer_metrics = _check_15m_hammer(df_15m)
-    rotation_ok, rotation_reason, rotation_metrics = _check_alt_rotation_entry(
-        df_5m_clean,
-        stage1_meta,
-    )
 
     metrics = {
         "squeeze_5m": squeeze_metrics,
         "hammer_15m": hammer_metrics,
-        "alt_rotation": rotation_metrics,
     }
-    if stage1_meta:
-        metrics["stage1"] = stage1_meta
 
     btc_block_reason = _btc_drop_reason(btc_df)
     if btc_block_reason:
@@ -115,21 +101,18 @@ def check(
     decision.entry_price = current_close
     decision.metrics = metrics
 
-    if not hammer_ok and not squeeze_ok and not rotation_ok:
+    if not hammer_ok and not squeeze_ok:
         decision.reject_reason = (
             f"hammer_15m: {hammer_reason}; "
-            f"squeeze_5m: {squeeze_reason}; "
-            f"alt_rotation: {rotation_reason}"
+            f"squeeze_5m: {squeeze_reason}"
         )
         logger.debug(f"[{symbol}] ENTRY HOLD - {decision.reject_reason}")
         return decision
 
     if hammer_ok:
         trigger = "HAMMER_15M"
-    elif squeeze_ok:
-        trigger = "FIRST_SPIKE_5M"
     else:
-        trigger = "ALT_ROTATION"
+        trigger = "FIRST_SPIKE_5M"
     decision.signal = "LONG"
     decision.should_enter = True
     decision.score = _score(trigger, metrics)
@@ -275,66 +258,6 @@ def _check_15m_hammer(df_15m: Optional[pd.DataFrame]) -> tuple[bool, str, dict]:
     return not reject_reasons, "; ".join(reject_reasons), metrics
 
 
-def _check_alt_rotation_entry(
-    df: pd.DataFrame,
-    stage1_meta: Optional[dict],
-) -> tuple[bool, str, dict]:
-    rotation = (stage1_meta or {}).get("alt_rotation", {})
-    active = bool(rotation.get("active"))
-    breadth = int(rotation.get("breadth", 0) or 0)
-
-    current = df.iloc[-1]
-    quiet = df.iloc[-(SILENCE_LOOKBACK + 1):-1]
-    quiet_avg = float(quiet["volume"].mean())
-    if quiet_avg <= 0:
-        return False, "quiet average volume is zero", {"active": active, "breadth": breadth}
-
-    current_open = float(current["open"])
-    current_close = float(current["close"])
-    current_volume = float(current["volume"])
-    quiet_low = float(quiet["low"].min())
-    spike_ratio = current_volume / quiet_avg
-    price_rise_pct = _price_rise_pct(current_close, quiet_low)
-    candle_return_pct = (
-        (current_close - current_open) / current_open * 100.0
-        if current_open > 0 else 0.0
-    )
-
-    metrics = {
-        "active": active,
-        "breadth": breadth,
-        "spike_ratio": round(spike_ratio, 2),
-        "price_rise_pct": round(price_rise_pct, 2),
-        "candle_return_pct": round(candle_return_pct, 2),
-        "market_spike_count": int(rotation.get("spike_count", 0) or 0),
-        "market_gainer_count": int(rotation.get("gainer_count", 0) or 0),
-    }
-
-    reject_reasons = []
-    if not active:
-        reject_reasons.append("alt rotation mode inactive")
-    if breadth < ALT_ROTATION_MIN_BREADTH:
-        reject_reasons.append(
-            f"breadth {breadth} < {ALT_ROTATION_MIN_BREADTH}"
-        )
-    if spike_ratio < ALT_ROTATION_MIN_VOLUME_SPIKE:
-        reject_reasons.append(
-            f"volume spike {spike_ratio:.1f}x < {ALT_ROTATION_MIN_VOLUME_SPIKE:.1f}x"
-        )
-    if price_rise_pct >= ALT_ROTATION_MAX_RISE_PCT:
-        reject_reasons.append(
-            f"already extended +{price_rise_pct:.1f}% >= {ALT_ROTATION_MAX_RISE_PCT:.1f}%"
-        )
-    if candle_return_pct < ALT_ROTATION_MIN_CANDLE_RETURN_PCT:
-        reject_reasons.append(
-            f"candle return {candle_return_pct:.1f}% < {ALT_ROTATION_MIN_CANDLE_RETURN_PCT:.1f}%"
-        )
-    if current_close <= current_open:
-        reject_reasons.append("current candle is not bullish")
-
-    return not reject_reasons, "; ".join(reject_reasons), metrics
-
-
 def _price_rise_pct(current_close: float, base_low: float) -> float:
     return ((current_close - base_low) / base_low * 100.0) if base_low > 0 else 999.0
 
@@ -382,16 +305,6 @@ def _score(trigger: str, metrics: dict) -> int:
         score += min(10, max(0, int((hammer.get("volume_ratio", 0) - HAMMER_VOLUME_MULTIPLIER) * 5)))
         score += min(10, max(0, int((hammer.get("wick_body_ratio", 0) - HAMMER_WICK_BODY_RATIO) * 3)))
         if hammer.get("price_rise_pct", 999) < 8:
-            score += 5
-        return min(score, 100)
-
-    if trigger == "ALT_ROTATION":
-        rotation = metrics.get("alt_rotation", {})
-        score = 68
-        score += min(12, max(0, int((rotation.get("spike_ratio", 0) - ALT_ROTATION_MIN_VOLUME_SPIKE) * 4)))
-        score += min(10, max(0, rotation.get("breadth", 0) - ALT_ROTATION_MIN_BREADTH))
-        score += min(5, max(0, int(rotation.get("candle_return_pct", 0))))
-        if rotation.get("price_rise_pct", 999) < 20:
             score += 5
         return min(score, 100)
 

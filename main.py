@@ -51,6 +51,7 @@ from orderbook           import OrderBookManager
 import signal_engine
 import signal_scorer
 import entry_engine
+import long_test
 from risk_manager        import RiskManager
 from leverage_manager    import LeverageManager
 from circuit_breaker     import CircuitBreaker
@@ -160,6 +161,7 @@ class CryptoSniperBot:
             api_secret = self.cfg.exchange.api_secret,
             testnet    = self.cfg.exchange.testnet,
         )
+        self.long_test_cfg = long_test.config_from_env()
         self.ob = OrderBookManager(symbols=[])   # 심볼은 스캔 후 설정
 
         self.executor = OrderExecutor(
@@ -195,6 +197,9 @@ class CryptoSniperBot:
         self._feed_restart_guard_after_sec = 75
         self._last_closed_candles: set[tuple[str, str, str]] = set()
         self._last_entry_engine_triggers: set[tuple[str, str]] = set()
+        self._entry_pending: dict[str, dict] = {}
+        self._entry_overrides: dict[str, object] = {}
+        self._entry_pending_expire_seconds = 6 * 60 * 60
 
         # 청산 후 쿨다운 {symbol: close_time}
         # 같은 종목 재진입 시 COOLDOWN_MINUTES 경과 여부 체크
@@ -310,6 +315,11 @@ class CryptoSniperBot:
         logger.info(f"  min_confidence     : {self.cfg.strategy.min_confidence}")
         logger.info(f"  risk_per_trade_pct : {self.cfg.risk.risk_per_trade_pct*100:.1f}%")
         logger.info(f"  max_positions      : {self.cfg.risk.max_positions}")
+        logger.info(
+            f"  long_test          : "
+            f"{'ON' if self.long_test_cfg.enabled else 'OFF'} "
+            f"mode={self.long_test_cfg.mode}"
+        )
         logger.info("=" * 60)
 
         self._running = True
@@ -321,7 +331,7 @@ class CryptoSniperBot:
 
         # 2. 관심 심볼 초기 갱신 (REST 대량 호출 — 1회만)
         logger.info("관심 심볼 초기 갱신 중...")
-        self._refresh_watchlist()
+        self._refresh_watchlist(restart_feed=False)
 
         # 3. 거래소 열린 포지션 복구 (재시작 시 기존 포지션 동기화)
         self._restore_positions()
@@ -575,30 +585,52 @@ class CryptoSniperBot:
 
         # BTC 5m 데이터 수집 (entry_engine 급락 필터용)
         btc_df_5m = None
+        btc_df_1h = None
         if "BTC" not in symbol:
             btc_df_5m = self.fetcher.get_df("BTC/USDT:USDT", cfg.strategy.confirm_timeframe)
+            btc_df_1h = self.fetcher.get_df("BTC/USDT:USDT", cfg.strategy.trend_timeframe)
 
         # ── Step 4. 신호 판단 ─────────────────────────────────────────────
         legacy_sig = signal_engine.SignalResult()
         legacy_sig.reject_reason = "signal_engine disabled"
 
-        entry_decision = entry_engine.check(
-            symbol,
-            df_5m,
-            df_15m=df_15m,
-            btc_df=btc_df_5m,
-            stage1_meta={
-                "alt_rotation": self._detect_alt_rotation_mode(
-                    list(self._subscribed_symbols),
-                    cfg.strategy.confirm_timeframe,
+        decision_source = "PENDING"
+        entry_decision = self._entry_overrides.pop(symbol, None)
+        if entry_decision is None:
+            # 1차: long_test (BB 중간선 눌림)
+            if self.long_test_cfg.enabled:
+                lt_decision = long_test.check(
+                    symbol,
+                    df_1h,
+                    df_15m,
+                    btc_df_1h=btc_df_1h,
+                    cfg=self.long_test_cfg,
                 )
-            },
-        )
+                if lt_decision.should_enter:
+                    entry_decision = lt_decision
+                    decision_source = "LONG_TEST"
+
+            # 2차: entry_engine (침묵 후 첫 스파이크) — long_test 가 HOLD 일 때만
+            if entry_decision is None:
+                ee_decision = entry_engine.check(
+                    symbol,
+                    df_5m,
+                    df_15m=df_15m,
+                    btc_df=btc_df_5m,
+                )
+                if ee_decision.metrics.get("trigger") == "FIRST_SPIKE_5M":
+                    self._handle_first_spike_pending(symbol, df_5m, ee_decision)
+                    logger.info(
+                        f"[{symbol}] FIRST_SPIKE_5M pending 전환 — 즉시 진입 보류"
+                    )
+                    return
+                entry_decision = ee_decision
+                decision_source = "ENTRY_ENGINE"
         sig = self._build_entry_engine_signal(symbol, entry_decision, legacy_sig, df_15m)
         score = self._build_entry_engine_score(entry_decision, sig)
 
         logger.info(
-            f"[{symbol}] ENTRY_ENGINE {entry_decision.signal} "
+            f"[{symbol}] {decision_source} {entry_decision.signal} "
             f"trigger={entry_decision.metrics.get('trigger', '-')} "
             f"confidence={score.confidence} "
             f"legacy=OFF "
@@ -647,8 +679,8 @@ class CryptoSniperBot:
         if cfg.system.dry_run:
             logger.info(
                 f"[DRY RUN] {symbol}  {sig.signal}  "
-                f"entry={plan.entry_price:.4f}  "
-                f"SL={plan.sl_price:.4f}  "
+                f"entry={plan.entry_price:.8f}  "
+                f"SL={plan.sl_price:.8f}  "
                 f"lev={plan.leverage}x  "
                 f"size={plan.position_size:.6f}"
             )
@@ -675,8 +707,8 @@ class CryptoSniperBot:
             logger.info(
                 f"[{symbol}] 진입 성공  "
                 f"{sig.signal} × {plan.leverage}x  "
-                f"entry={actual_entry:.4f}  "
-                f"SL={actual_sl:.4f}  TP1={actual_tp1:.4f}"
+                f"entry={actual_entry:.8f}  "
+                f"SL={actual_sl:.8f}  TP1={actual_tp1:.8f}"
             )
 
             if cfg.notification.notify_entry:
@@ -705,17 +737,18 @@ class CryptoSniperBot:
         from types import SimpleNamespace
 
         trigger = decision.metrics.get("trigger", "")
-        signal = "LONG" if decision.should_enter else "HOLD"
+        signal = decision.signal if decision.should_enter else "HOLD"
         reject_reason = decision.reject_reason
         if decision.should_enter:
-            reject_reason = f"entry_engine:{trigger}; legacy={legacy_sig.signal}/{legacy_sig.score}"
+            source = decision.metrics.get("strategy", "entry_engine")
+            reject_reason = f"{source}:{trigger}; legacy={legacy_sig.signal}/{legacy_sig.score}"
 
         trend = getattr(legacy_sig, "trend", None)
         if trend is None:
             atr = self._entry_engine_atr(df_15m)
             atr_ratio = (atr / decision.entry_price) if decision.entry_price > 0 else 0.0
             trend = SimpleNamespace(
-                trend_direction="ENTRY_ENGINE",
+                trend_direction=decision.metrics.get("strategy", "ENTRY_ENGINE"),
                 adx=0.0,
                 atr=atr,
                 atr_ratio=atr_ratio,
@@ -748,7 +781,10 @@ class CryptoSniperBot:
             context_score=0,
             penalty_score=0,
             raw_total=confidence,
-            context_details={"entry_engine": decision.metrics.get("trigger", "")},
+            context_details={
+                "source": decision.metrics.get("strategy", "entry_engine"),
+                "trigger": decision.metrics.get("trigger", ""),
+            },
             penalty_details={},
             signal_result=sig,
         )
@@ -984,7 +1020,7 @@ class CryptoSniperBot:
         else:
             logger.info(f"=== 포지션 복구 완료: {restored}개 ===")
 
-    def _refresh_watchlist(self) -> None:
+    def _refresh_watchlist(self, restart_feed: bool = True) -> None:
         """
         관심 심볼 30개 갱신 — 자정마다 스케줄러 호출.
         REST API 대량 호출(수백 회)은 오직 이 메서드에서만 발생.
@@ -999,13 +1035,18 @@ class CryptoSniperBot:
 
             added = desired_feed - current_feed
             removed = current_feed - desired_feed
-            if added or removed:
+            if (added or removed) and restart_feed:
                 logger.info(
                     f"관심 심볼 갱신 → feed 재구독 ({len(desired_feed)}개)  "
                     f"추가={ [s.split('/')[0] for s in sorted(added)] if added else [] }  "
                     f"제거={ [s.split('/')[0] for s in sorted(removed)] if removed else [] }"
                 )
                 self._request_feed_restart(sorted(desired_feed), "watchlist_refresh")
+            elif added or removed:
+                logger.info(
+                    f"관심 심볼 초기 갱신 완료: {len(new_watchlist)}개 "
+                    f"(feed는 초기 스캔 후 1회만 시작)"
+                )
             else:
                 logger.info(
                     f"관심 심볼 갱신 완료: {len(new_watchlist)}개 "
@@ -1032,6 +1073,8 @@ class CryptoSniperBot:
 
     def _entry_engine_5m_scan(self) -> None:
         """Run leading entry checks on cached 5m WebSocket data only."""
+        if getattr(self, "long_test_cfg", None) and self.long_test_cfg.enabled:
+            return
         if self.fetcher is None:
             return
 
@@ -1043,14 +1086,6 @@ class CryptoSniperBot:
         tf_5m = self.cfg.strategy.confirm_timeframe
         tf_15m = self.cfg.strategy.entry_timeframe
         btc_df_5m = self.fetcher.get_df("BTC/USDT:USDT", tf_5m)
-        alt_rotation_meta = self._detect_alt_rotation_mode(symbols, tf_5m)
-        if alt_rotation_meta["active"]:
-            logger.info(
-                "ALT_ROTATION_MODE active: "
-                f"breadth={alt_rotation_meta['breadth']} "
-                f"spikes={alt_rotation_meta['spike_count']} "
-                f"gainers={alt_rotation_meta['gainer_count']}"
-            )
 
         checked = 0
         triggered = 0
@@ -1074,16 +1109,26 @@ class CryptoSniperBot:
                     df_5m,
                     df_15m=df_15m,
                     btc_df=None if "BTC" in symbol else btc_df_5m,
-                    stage1_meta={"alt_rotation": alt_rotation_meta},
                 )
                 checked += 1
 
                 if not decision.should_enter:
+                    if self._update_pending_entry(symbol, df_5m):
+                        self._last_entry_engine_triggers.add(trigger_key)
+                        self._scan_candidates.add(symbol)
+                        triggered += 1
+                        self._process_signal_guarded(symbol, "first_spike_breakout")
                     logger.debug(
                         f"[{symbol}] ENTRY_ENGINE_5M HOLD "
                         f"reason={decision.reject_reason}"
                     )
                     continue
+
+                trigger = decision.metrics.get("trigger", "-")
+                if trigger == "FIRST_SPIKE_5M":
+                    pending_action = self._handle_first_spike_pending(symbol, df_5m, decision)
+                    if pending_action != "ENTER":
+                        continue
 
                 self._last_entry_engine_triggers.add(trigger_key)
                 if len(self._last_entry_engine_triggers) > 5000:
@@ -1093,7 +1138,7 @@ class CryptoSniperBot:
 
                 logger.info(
                     f"[{symbol}] ENTRY_ENGINE_5M TRIGGER "
-                    f"trigger={decision.metrics.get('trigger', '-')} "
+                    f"trigger={trigger} "
                     f"score={decision.score} price={decision.entry_price:.8f}"
                 )
 
@@ -1110,60 +1155,108 @@ class CryptoSniperBot:
                 f"ENTRY_ENGINE_5M scan done: checked={checked} triggered={triggered}"
             )
 
-    def _detect_alt_rotation_mode(self, symbols: list[str], timeframe: str) -> dict:
-        """Detect broad alt rotation using only cached DataFetcher 5m data."""
-        excluded = {"BTC", "ETH", "BUSD", "USDC", "TUSD", "DAI", "USDP"}
-        checked = 0
-        spike_count = 0
-        gainer_count = 0
-        leaders = []
+    def _handle_first_spike_pending(self, symbol: str, df_5m: pd.DataFrame, decision) -> str:
+        """Convert FIRST_SPIKE_5M into pending breakout confirmation."""
+        df = df_5m.dropna(subset=["open", "high", "low", "close", "volume"])
+        if len(df) < 22:
+            return "WAIT"
 
-        for symbol in symbols:
-            base = symbol.split("/")[0]
-            if base in excluded:
-                continue
+        candle = df.iloc[-1]
+        quiet = df.iloc[-21:-1]
+        now_ts = time.time()
+        candle_ts = str(df.index[-1])
+        close = float(candle["close"])
+        spike_high = float(candle["high"])
+        spike_low = float(candle["low"])
+        body_mid = (float(candle["open"]) + float(candle["close"])) / 2
+        box_high = float(quiet["high"].max())
+        invalid_low = max(spike_low, box_high * 0.98)
 
-            df = self.fetcher.get_df(symbol, timeframe) if self.fetcher else None
-            if df is None or len(df) < 21:
-                continue
+        pending = self._entry_pending.get(symbol)
+        if pending is None or pending.get("source_candle") != candle_ts:
+            self._entry_pending[symbol] = {
+                "source_candle": candle_ts,
+                "detected_ts": now_ts,
+                "expires_ts": now_ts + self._entry_pending_expire_seconds,
+                "spike_high": spike_high,
+                "spike_low": spike_low,
+                "body_mid": body_mid,
+                "box_high": box_high,
+                "invalid_low": invalid_low,
+                "below_mid_count": 0,
+            }
+            logger.info(
+                f"[{symbol}] FIRST_SPIKE pending 등록 "
+                f"spike_high={spike_high:.8f} box_high={box_high:.8f} "
+                f"invalid_low={invalid_low:.8f}"
+            )
+        return "WAIT"
 
-            try:
-                recent = df.dropna(subset=["open", "close", "volume"]).tail(21)
-                if len(recent) < 21:
-                    continue
-                current = recent.iloc[-1]
-                prev = recent.iloc[:-1]
-                avg_vol = float(prev["volume"].mean())
-                open_ = float(current["open"])
-                close = float(current["close"])
-                if avg_vol <= 0 or open_ <= 0:
-                    continue
+    def _update_pending_entry(self, symbol: str, df_5m: pd.DataFrame) -> bool:
+        """Return True when a pending FIRST_SPIKE confirms breakout."""
+        pending = self._entry_pending.get(symbol)
+        if not pending:
+            return False
 
-                checked += 1
-                vol_ratio = float(current["volume"]) / avg_vol
-                ret_pct = (close - open_) / open_ * 100.0
+        df = df_5m.dropna(subset=["open", "high", "low", "close", "volume"])
+        if len(df) < 22:
+            return False
 
-                if vol_ratio >= 2.0:
-                    spike_count += 1
-                if ret_pct >= 3.0:
-                    gainer_count += 1
-                if vol_ratio >= 2.0 or ret_pct >= 3.0:
-                    leaders.append((base, round(vol_ratio, 2), round(ret_pct, 2)))
-            except Exception:
-                continue
+        now_ts = time.time()
+        if now_ts > pending["expires_ts"]:
+            self._entry_pending.pop(symbol, None)
+            logger.info(f"[{symbol}] FIRST_SPIKE pending 만료")
+            return False
 
-        breadth = max(spike_count, gainer_count)
-        active = checked >= 8 and (spike_count >= 5 or gainer_count >= 8)
-        leaders.sort(key=lambda item: (item[1], item[2]), reverse=True)
+        current = df.iloc[-1]
+        close = float(current["close"])
+        low = float(current["low"])
+        volume = float(current["volume"])
+        recent = df.tail(7).iloc[:-1]
+        recent_high = float(recent["high"].max())
+        quiet_avg = float(df.iloc[-21:-1]["volume"].mean())
+        volume_ratio = volume / quiet_avg if quiet_avg > 0 else 0.0
+        breakout_level = max(pending["spike_high"], pending["box_high"], recent_high)
 
-        return {
-            "active": active,
-            "checked": checked,
-            "breadth": breadth,
-            "spike_count": spike_count,
-            "gainer_count": gainer_count,
-            "leaders": leaders[:5],
-        }
+        if close < pending["body_mid"]:
+            pending["below_mid_count"] = pending.get("below_mid_count", 0) + 1
+        else:
+            pending["below_mid_count"] = 0
+
+        if pending["below_mid_count"] >= 2 or low < pending["invalid_low"]:
+            self._entry_pending.pop(symbol, None)
+            logger.info(
+                f"[{symbol}] FIRST_SPIKE pending 폐기 "
+                f"close={close:.8f} low={low:.8f} invalid={pending['invalid_low']:.8f}"
+            )
+            return False
+
+        if close > breakout_level and volume_ratio >= 1.2:
+            self._entry_pending.pop(symbol, None)
+            decision = entry_engine.EntryDecision(
+                signal="LONG",
+                should_enter=True,
+                direction="LONG",
+                entry_price=close,
+                score=78,
+                metrics={
+                    "trigger": "FIRST_SPIKE_BREAKOUT_5M",
+                    "pending": {
+                        "spike_high": pending["spike_high"],
+                        "box_high": pending["box_high"],
+                        "breakout_level": breakout_level,
+                        "volume_ratio": round(volume_ratio, 2),
+                    },
+                },
+            )
+            self._entry_overrides[symbol] = decision
+            logger.info(
+                f"[{symbol}] FIRST_SPIKE pending 돌파 확인 "
+                f"close={close:.8f} breakout={breakout_level:.8f} vol={volume_ratio:.1f}x"
+            )
+            return True
+
+        return False
 
     def _process_signal_guarded(self, symbol: str, source: str) -> None:
         """Run _process_signal with the same duplicate guard used by candle callbacks."""

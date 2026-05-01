@@ -317,8 +317,8 @@ class OrderExecutor:
         report.success = True
         logger.info(
             f"[{plan.symbol}] 진입 완료  "
-            f"체결가={actual_entry:.4f}  "
-            f"SL={sl:.4f}  TP1={tp1:.4f}  TP2={tp2:.4f}"
+            f"체결가={actual_entry:.8f}  "
+            f"SL={sl:.8f}  TP1={tp1:.8f}  TP2={tp2:.8f}"
         )
         return report
 
@@ -816,16 +816,33 @@ def _recalc_levels(
 
     if plan.direction == "LONG":
         return (
-            round(actual_entry - sl_dist,  4),
-            round(actual_entry + tp1_dist, 4),
-            round(actual_entry + tp2_dist, 4),
+            _round_price_level(actual_entry - sl_dist),
+            _round_price_level(actual_entry + tp1_dist),
+            _round_price_level(actual_entry + tp2_dist),
         )
     else:
         return (
-            round(actual_entry + sl_dist,  4),
-            round(actual_entry - tp1_dist, 4),
-            round(actual_entry - tp2_dist, 4),
+            _round_price_level(actual_entry + sl_dist),
+            _round_price_level(actual_entry - tp1_dist),
+            _round_price_level(actual_entry - tp2_dist),
         )
+
+
+def _round_price_level(price: float) -> float:
+    """Preserve enough decimals for low-priced futures symbols."""
+    if price <= 0:
+        return 0.0
+    if price < 0.001:
+        digits = 8
+    elif price < 0.01:
+        digits = 7
+    elif price < 0.1:
+        digits = 6
+    elif price < 1:
+        digits = 5
+    else:
+        digits = 4
+    return round(price, digits)
 
 
 def _calc_pnl(

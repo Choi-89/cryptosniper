@@ -36,10 +36,11 @@ logger = logging.getLogger("orderbook")
 # ── 상수 ───────────────────────────────────────────────────────────────────────
 WS_BASE_URL      = "wss://fstream.binance.com/stream?streams="
 DEPTH_LEVEL      = 20          # 호가창 구독 depth (5 / 10 / 20)
-UPDATE_SPEED_MS  = 100         # 업데이트 속도 ms (100ms / 250ms / 500ms)
+UPDATE_SPEED_MS  = 500         # 업데이트 속도 ms (100ms / 250ms / 500ms)
 RECONNECT_DELAY  = 5
 RECONNECT_MAX    = 60
-PING_INTERVAL    = 20
+PING_INTERVAL    = 30
+PING_TIMEOUT     = 15
 
 # 슬리피지 경고 임계값
 MAX_SLIPPAGE_PCT = 0.003       # 0.3% 초과 시 진입 비권고
@@ -350,7 +351,7 @@ class OrderBookManager:
             on_error   = self._on_error,
             on_close   = self._on_close,
         )
-        self._ws.run_forever(ping_interval=PING_INTERVAL, ping_timeout=10)
+        self._ws.run_forever(ping_interval=PING_INTERVAL, ping_timeout=PING_TIMEOUT)
 
     def _build_ws_url(self) -> str:
         """

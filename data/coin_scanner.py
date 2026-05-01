@@ -52,16 +52,17 @@ WATCHLIST_SIZE     = 30
 # ── A군 / B군 분리 watchlist 상수 ──────────────────────────────────────────────
 WATCHLIST_A_SIZE        = 10     # A군: 유동성 안정 종목 수
 WATCHLIST_B_SIZE        = 20     # B군: 지금 움직이는 종목 수
-WATCHLIST_B_MIN_QUOTE   = 5_000_000   # B군 최소 거래대금 ($500만, 저유동성 차단)
+WATCHLIST_B_MIN_QUOTE   = 500_000     # B군 최소 거래대금 ($50만, 저유동성 알트 포함)
 WATCHLIST_B_REFRESH_MIN = 30     # B군 갱신 주기 (분) — 급등 종목 조기 포착
 WATCHLIST_B_VOLUME_LOOKBACK = 24 # B군 판단 기준: 최근 N시간 대비 현재 1시간 배수
 WATCHLIST_B_5M_TIMEFRAME = "5m"
 WATCHLIST_B_5M_LIMIT = 30
 WATCHLIST_B_SILENCE_LOOKBACK = 20
-WATCHLIST_B_MIN_SILENT_BARS = 15
-WATCHLIST_B_SPIKE_RATIO = 3.0
 WATCHLIST_B_MAX_RISE_PCT = 15.0
 WATCHLIST_B_REQUEST_DELAY = 0.03
+WATCHLIST_B_RECENT_SPIKE_BARS = 6
+WATCHLIST_B_MIN_SILENT_BARS = 13
+WATCHLIST_B_SPIKE_RATIO = 3.0
 
 # ── watchlist 혼합 점수 가중치 ────────────────────────────────────────────────
 # DB 분석 결과: 24시간 거래대금 단일 기준 → BTC/ETH/XRP 등 메이저 코인 위주
@@ -293,7 +294,15 @@ class CoinScanner:
                 continue
             candidates.append((symbol, quote_vol))
 
+        # 저유동성 알트 타겟: 50만~1000만 범위만 2단계 처리
+        # 너무 크면 이미 활발한 종목, 너무 작으면 진입/청산 불가
+        WATCHLIST_B_MAX_QUOTE = 10_000_000  # 1000만 상한
+        candidates = [
+            (s, v) for s, v in candidates
+            if v <= WATCHLIST_B_MAX_QUOTE
+        ]
         candidates.sort(key=lambda x: x[1], reverse=True)
+        candidates = candidates[:150]  # 범위 내 상위 150개
 
         scored = []
         for symbol, quote_vol in candidates:
@@ -312,40 +321,55 @@ class CoinScanner:
                 continue
 
             df = self._ohlcv_to_df(ohlcv)
-            current = df.iloc[-1]
-            quiet = df.iloc[-(WATCHLIST_B_SILENCE_LOOKBACK + 1):-1]
-
-            quiet_avg = float(quiet["volume"].mean())
-            if quiet_avg <= 0:
+            if len(df) < WATCHLIST_B_SILENCE_LOOKBACK + 1:
                 continue
 
-            current_vol = float(current["volume"])
-            spike_ratio = current_vol / quiet_avg
-            silent_bars = int((quiet["volume"] <= quiet_avg).sum())
-            prior_spikes = int((quiet["volume"] >= quiet_avg * WATCHLIST_B_SPIKE_RATIO).sum())
-            quiet_low = float(quiet["low"].min())
-            close = float(current["close"])
-            open_ = float(current["open"])
-            rise_pct = ((close - quiet_low) / quiet_low * 100.0) if quiet_low > 0 else 999.0
-
-            if silent_bars < WATCHLIST_B_MIN_SILENT_BARS:
-                continue
-            if spike_ratio < WATCHLIST_B_SPIKE_RATIO:
-                continue
-            if prior_spikes > 0:
-                continue
-            if rise_pct >= WATCHLIST_B_MAX_RISE_PCT:
-                continue
-            if close <= open_:
-                continue
-
-            score = (
-                spike_ratio * 10
-                + silent_bars
-                + min(20.0, quote_vol / 1_000_000)
-                - rise_pct
+            best = None
+            start_idx = max(
+                WATCHLIST_B_SILENCE_LOOKBACK,
+                len(df) - WATCHLIST_B_RECENT_SPIKE_BARS,
             )
-            scored.append((symbol, score, spike_ratio, silent_bars, rise_pct, quote_vol))
+
+            for idx in range(start_idx, len(df)):
+                candle = df.iloc[idx]
+                quiet = df.iloc[idx - WATCHLIST_B_SILENCE_LOOKBACK:idx]
+
+                quiet_avg = float(quiet["volume"].mean())
+                if quiet_avg <= 0:
+                    continue
+
+                current_vol = float(candle["volume"])
+                spike_ratio = current_vol / quiet_avg
+                silent_bars = int((quiet["volume"] <= quiet_avg).sum())
+                prior_spikes = int((quiet["volume"] >= quiet_avg * WATCHLIST_B_SPIKE_RATIO).sum())
+                quiet_low = float(quiet["low"].min())
+                close = float(candle["close"])
+                open_ = float(candle["open"])
+                rise_pct = ((close - quiet_low) / quiet_low * 100.0) if quiet_low > 0 else 999.0
+
+                if silent_bars < WATCHLIST_B_MIN_SILENT_BARS:
+                    continue
+                if spike_ratio < WATCHLIST_B_SPIKE_RATIO:
+                    continue
+                if prior_spikes > 0:
+                    continue
+                if rise_pct >= WATCHLIST_B_MAX_RISE_PCT:
+                    continue
+
+                score = (
+                    spike_ratio * 10
+                    + silent_bars
+                    + (5.0 if close > open_ else 0.0)
+                    + (idx - start_idx)
+                    + min(20.0, quote_vol / 1_000_000)
+                    - rise_pct
+                )
+                candidate = (symbol, score, spike_ratio, silent_bars, rise_pct, quote_vol)
+                if best is None or candidate[1] > best[1]:
+                    best = candidate
+
+            if best:
+                scored.append(best)
 
         scored.sort(key=lambda x: x[1], reverse=True)
 
